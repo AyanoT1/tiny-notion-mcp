@@ -15,7 +15,7 @@ Instead of returning raw Notion API JSON, every tool returns the smallest useful
 
 ### TOON format
 
-Search results and page creation responses use the compact **TOON** (Title | Object | Optional Notes) format:
+Search results and page creation responses use the compact **TOON** format:
 
 ```
 Page title | page-id | https://notion.so/... | parent:<parent-id>
@@ -43,7 +43,7 @@ Inline formatting (bold, italic, bold-italic, strikethrough, underline, inline c
 
 The same block types are supported on write. Markdown is parsed and appended to the target page as native Notion blocks.
 
-## Not yet implemented (v2)
+## Not yet implemented or coming soon
 
 The following block types are recognised by Notion but not yet handled. They are silently skipped on read and cannot be written:
 
