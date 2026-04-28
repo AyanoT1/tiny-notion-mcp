@@ -3,6 +3,7 @@ from tiny_notion_mcp.core import (
     notion_search,
     notion_read,
     notion_write,
+    notion_create_page,
     set_client,
     NotionClient,
 )
@@ -13,6 +14,7 @@ class MockNotionClient(NotionClient):
         self._pages = pages or []
         self._blocks = {}
         self.appended = []
+        self.created_pages = []
 
     def search(self, query, limit=10):
         results = []
@@ -29,6 +31,11 @@ class MockNotionClient(NotionClient):
         self.appended.extend(children)
         results = [{"id": f"appended-block-{len(self.appended)-len(children)+i}"} for i in range(len(children))]
         return {"object": "list", "results": results}
+
+    def pages_create(self, parent_id, title):
+        page = {"id": f"new-page-{len(self.created_pages)}", "url": f"https://notion.so/new-page-{len(self.created_pages)}"}
+        self.created_pages.append({"parent_id": parent_id, "title": title})
+        return page
 
 
 @pytest.fixture
@@ -158,6 +165,30 @@ class TestNumberedLists:
         item = next(b for b in client.appended if b.get("type") == "numbered_list_item")
         text = item["numbered_list_item"]["rich_text"][0]["text"]["content"]
         assert text == "Hello world"
+
+
+class TestSearchParentId:
+    def test_search_includes_parent_id_when_present(self, client):
+        client._pages = [{
+            "id": "page-1",
+            "properties": {"title": {"title": [{"plain_text": "Child Page"}]}},
+            "url": "https://notion.so/Child-Page",
+            "parent": {"type": "page_id", "page_id": "parent-abc"},
+        }]
+        set_client(client)
+        result = notion_search("child")
+        assert "parent:parent-abc" in result
+
+    def test_search_omits_parent_for_workspace_pages(self, client):
+        client._pages = [{
+            "id": "page-1",
+            "properties": {"title": {"title": [{"plain_text": "Root Page"}]}},
+            "url": "https://notion.so/Root-Page",
+            "parent": {"type": "workspace", "workspace": True},
+        }]
+        set_client(client)
+        result = notion_search("root")
+        assert "parent:" not in result
 
 
 class TestStripMetadata:
@@ -388,3 +419,53 @@ class TestWriteTables:
             "[TABLE:" in b.get("paragraph", {}).get("rich_text", [{}])[0].get("text", {}).get("content", "")
             for b in client.appended if b.get("type") == "paragraph"
         )
+
+
+class TestReadChildPage:
+    def test_child_page_renders_as_markdown_link(self, client):
+        client._blocks["page-123"] = [
+            {
+                "id": "34fd0f2f-ad60-814c-9322-dffc7e4ef305",
+                "type": "child_page",
+                "child_page": {"title": "Tiny Notion MCP"},
+            },
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "[Subpage: Tiny Notion MCP](34fd0f2f-ad60-814c-9322-dffc7e4ef305)" in result
+
+    def test_child_page_mixed_with_other_blocks(self, client):
+        client._blocks["page-123"] = [
+            {"id": "block-1", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "Intro"}]}},
+            {"id": "child-id", "type": "child_page", "child_page": {"title": "Sub"}},
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "Intro" in result
+        assert "[Subpage: Sub](child-id)" in result
+
+
+class TestCreatePage:
+    def test_create_page_returns_toon_format(self, client):
+        set_client(client)
+        result = notion_create_page("parent-123", "My New Page")
+        parts = result.split(" | ")
+        assert len(parts) == 3
+        assert parts[0] == "My New Page"
+
+    def test_create_page_calls_pages_create_with_correct_args(self, client):
+        set_client(client)
+        notion_create_page("parent-123", "My New Page")
+        assert len(client.created_pages) == 1
+        assert client.created_pages[0]["parent_id"] == "parent-123"
+        assert client.created_pages[0]["title"] == "My New Page"
+
+    def test_create_page_with_markdown_appends_blocks(self, client):
+        set_client(client)
+        notion_create_page("parent-123", "My New Page", markdown="# Hello")
+        assert len(client.appended) > 0
+
+    def test_create_page_without_markdown_does_not_append(self, client):
+        set_client(client)
+        notion_create_page("parent-123", "My New Page")
+        assert len(client.appended) == 0

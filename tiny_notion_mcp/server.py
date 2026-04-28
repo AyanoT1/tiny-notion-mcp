@@ -5,7 +5,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from tiny_notion_mcp.core import notion_search, notion_read, notion_write, NotionClient
+from tiny_notion_mcp.core import notion_search, notion_read, notion_write, notion_create_page, NotionClient
 
 
 class NotionClientImpl(NotionClient):
@@ -27,6 +27,12 @@ class NotionClientImpl(NotionClient):
 
     def blocks_children_append(self, block_id: str, children: list[dict]) -> dict:
         return self._client.blocks.children.append(block_id=block_id, children=children)
+
+    def pages_create(self, parent_id: str, title: str) -> dict:
+        return self._client.pages.create(
+            parent={"type": "page_id", "page_id": parent_id},
+            properties={"title": {"title": [{"text": {"content": title}}]}},
+        )
 
 
 def _create_client() -> NotionClient:
@@ -77,6 +83,19 @@ async def list_tools() -> list[Tool]:
                 "required": ["page_id", "markdown"],
             },
         ),
+        Tool(
+            name="notion_create_page",
+            description="Create a new subpage under a parent page. Returns TOON format with the new page ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "parent_id": {"type": "string", "description": "Parent page ID"},
+                    "title": {"type": "string", "description": "Title of the new page"},
+                    "markdown": {"type": "string", "description": "Optional content to write to the new page"},
+                },
+                "required": ["parent_id", "title"],
+            },
+        ),
     ]
 
 
@@ -98,6 +117,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         result = notion_write(
             page_id=arguments["page_id"],
             markdown=arguments["markdown"],
+        )
+    elif name == "notion_create_page":
+        result = notion_create_page(
+            parent_id=arguments["parent_id"],
+            title=arguments["title"],
+            markdown=arguments.get("markdown", ""),
         )
     else:
         raise ValueError(f"Unknown tool: {name}")

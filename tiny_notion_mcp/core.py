@@ -5,17 +5,21 @@ from typing import TypedDict
 
 class NotionClient:
     """Notion API client wrapper."""
-    
+
     def search(self, query: str, limit: int = 10) -> list[dict]:
         """Search Notion pages."""
         ...
-    
+
     def blocks_children_list(self, block_id: str) -> list[dict]:
         """List block children."""
         ...
-    
+
     def blocks_children_append(self, block_id: str, children: list[dict]) -> dict:
         """Append blocks to a page."""
+        ...
+
+    def pages_create(self, parent_id: str, title: str) -> dict:
+        """Create a new page under parent_id."""
         ...
 
 
@@ -49,8 +53,12 @@ def notion_search(query: str, limit: int = 10) -> str:
     for r in results:
         title = r.get("properties", {}).get("title", {}).get("title", [])
         title_text = "".join(t.get("plain_text", "") for t in title)
-        
-        lines.append(f"{title_text} | {r.get('id', '')} | {r.get('url', '')}")
+
+        parent = r.get("parent", {})
+        parent_id = parent.get("page_id") or parent.get("database_id") or ""
+        parent_part = f" | parent:{parent_id}" if parent_id else ""
+
+        lines.append(f"{title_text} | {r.get('id', '')} | {r.get('url', '')}{parent_part}")
     
     return "\n".join(lines)
 
@@ -110,6 +118,21 @@ def notion_write(page_id: str, markdown: str) -> dict:
     return result
 
 
+def notion_create_page(parent_id: str, title: str, markdown: str = "") -> str:
+    """
+    Create a subpage under parent_id with the given title.
+    Optionally appends markdown content to the new page.
+    Returns TOON format: Title | ID | URL
+    """
+    client = _get_client()
+    page = client.pages_create(parent_id, title)
+    page_id = page.get("id", "")
+    url = page.get("url", "")
+    if markdown:
+        notion_write(page_id, markdown)
+    return f"{title} | {page_id} | {url}"
+
+
 def _blocks_to_markdown(blocks: list[dict]) -> str:
     """Convert Notion blocks to markdown."""
     lines = []
@@ -150,6 +173,10 @@ def _blocks_to_markdown(blocks: list[dict]) -> str:
         elif block_type == "heading_3":
             text = _get_rich_text(block.get("heading_3", {}))
             lines.append(f"### {text}")
+        elif block_type == "child_page":
+            child_title = block.get("child_page", {}).get("title", "")
+            child_id = block.get("id", "")
+            lines.append(f"[Subpage: {child_title}]({child_id})")
         elif block_type == "bulleted_list_item":
             text = _get_rich_text(block.get("bulleted_list_item", {}))
             lines.append(f"- {text}")
