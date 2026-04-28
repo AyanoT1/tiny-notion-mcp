@@ -121,6 +121,44 @@ class TestWriteAppendsMarkdown:
         assert len(client.appended) > 0
 
 
+class TestNumberedLists:
+    def test_read_handles_numbered_list(self, client):
+        client._blocks["page-123"] = [
+            {"id": "block-1", "type": "numbered_list_item", "numbered_list_item": {"rich_text": [{"plain_text": "First"}]}},
+            {"id": "block-2", "type": "numbered_list_item", "numbered_list_item": {"rich_text": [{"plain_text": "Second"}]}},
+            {"id": "block-3", "type": "numbered_list_item", "numbered_list_item": {"rich_text": [{"plain_text": "Third"}]}},
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "1. First" in result
+        assert "2. Second" in result
+        assert "3. Third" in result
+
+    def test_read_resets_numbered_list_counter(self, client):
+        client._blocks["page-123"] = [
+            {"id": "block-1", "type": "numbered_list_item", "numbered_list_item": {"rich_text": [{"plain_text": "First"}]}},
+            {"id": "block-2", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "Break"}]}},
+            {"id": "block-3", "type": "numbered_list_item", "numbered_list_item": {"rich_text": [{"plain_text": "Restart"}]}},
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "1. First" in result
+        assert "1. Restart" in result
+
+    def test_write_handles_numbered_list(self, client):
+        set_client(client)
+        notion_write("page-123", "1. First\n2. Second")
+        types = [b.get("type") for b in client.appended]
+        assert types.count("numbered_list_item") == 2
+
+    def test_write_numbered_list_content(self, client):
+        set_client(client)
+        notion_write("page-123", "1. Hello world")
+        item = next(b for b in client.appended if b.get("type") == "numbered_list_item")
+        text = item["numbered_list_item"]["rich_text"][0]["text"]["content"]
+        assert text == "Hello world"
+
+
 class TestStripMetadata:
     def test_search_strips_timestamps(self, client):
         client._pages = [{
@@ -206,6 +244,24 @@ class TestReadRichText:
         result = notion_read("page-123")
         assert "[click here](https://example.com)" in result
 
+    def test_read_handles_link_via_text_object(self, client):
+        client._blocks["page-123"] = [
+            {
+                "id": "block-1",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{
+                        "plain_text": "click here",
+                        "annotations": {"bold": False, "italic": False, "code": False},
+                        "text": {"content": "click here", "link": {"url": "https://example.com"}},
+                    }]
+                },
+            },
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "[click here](https://example.com)" in result
+
     def test_read_handles_bold_and_italic(self, client):
         client._blocks["page-123"] = [
             {
@@ -266,11 +322,12 @@ class TestReadTables:
                 "id": "table-block",
                 "type": "table",
                 "table": {
-                    "table_rows": 2,
                     "has_column_header": True,
                     "has_row_header": False,
                 },
             },
+        ]
+        client._blocks["table-block"] = [
             {
                 "id": "row-1",
                 "type": "table_row",
@@ -302,6 +359,12 @@ class TestWriteTables:
     def test_write_handles_table(self, client):
         set_client(client)
         notion_write("page-123", "| Name | Age |\n| --- | --- |\n| Alice | 30 |")
-        table_block = next((b for b in client.appended if b.get("type") == "table"), None)
-        assert table_block is not None
-        assert table_block.get("table", {}).get("table_rows", 0) >= 2
+        # Table write falls back to a placeholder paragraph (Notion API limitation)
+        assert not any(b.get("type") == "table" for b in client.appended)
+        placeholder = next(
+            (b for b in client.appended
+             if b.get("type") == "paragraph"
+             and "[TABLE:" in b.get("paragraph", {}).get("rich_text", [{}])[0].get("text", {}).get("content", "")),
+            None,
+        )
+        assert placeholder is not None

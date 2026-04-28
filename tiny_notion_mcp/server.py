@@ -26,26 +26,7 @@ class NotionClientImpl(NotionClient):
         return response.get("results", [])
 
     def blocks_children_append(self, block_id: str, children: list[dict]) -> dict:
-        has_table = any(b.get("type") == "table" for b in children)
-        
-        if has_table:
-            fallback_blocks = []
-            for child in children:
-                if child.get("type") == "table":
-                    fallback_blocks.append({
-                        "object": "block",
-                        "type": "paragraph",
-                        "paragraph": {"rich_text": [{"text": {"content": "[TABLE: see Notion page for actual table]"}}]},
-                    })
-                elif child.get("type") == "table_row":
-                    pass
-                else:
-                    fallback_blocks.append(child)
-            response = self._client.blocks.children.append(block_id=block_id, children=fallback_blocks)
-            return response
-        else:
-            response = self._client.blocks.children.append(block_id=block_id, children=children)
-            return response
+        return self._client.blocks.children.append(block_id=block_id, children=children)
 
 
 def _create_client() -> NotionClient:

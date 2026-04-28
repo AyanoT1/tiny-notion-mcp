@@ -70,30 +70,40 @@ def notion_read(page_id: str) -> str:
 def notion_write(page_id: str, markdown: str) -> dict:
     """
     Append markdown to a Notion page.
-    
+
     Converts markdown to blocks and appends to page.
+    Tables fall back to a placeholder paragraph (Notion API limitation).
     """
     client = _get_client()
     blocks = _markdown_to_blocks(markdown)
-    return client.blocks_children_append(page_id, blocks)
+    final_blocks = []
+    for block in blocks:
+        if block.get("type") == "table":
+            final_blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {"rich_text": [{"text": {"content": "[TABLE: see Notion page for actual table]"}}]},
+            })
+        elif block.get("type") != "table_row":
+            final_blocks.append(block)
+    return client.blocks_children_append(page_id, final_blocks)
 
 
 def _blocks_to_markdown(blocks: list[dict]) -> str:
     """Convert Notion blocks to markdown."""
     lines = []
     i = 0
+    numbered_index = 0
     while i < len(blocks):
         block = blocks[i]
         block_type = block.get("type", "")
+        if block_type != "numbered_list_item":
+            numbered_index = 0
 
         if block_type == "table":
-            table_info = block.get("table", {})
-            table_rows = table_info.get("table_rows", 0)
+            row_blocks = _get_client().blocks_children_list(block["id"])
             table_lines = []
-            row_count = 0
-            i += 1
-            while i < len(blocks) and row_count < table_rows:
-                row_block = blocks[i]
+            for row_block in row_blocks:
                 if row_block.get("type") == "table_row":
                     cells = row_block.get("table_row", {}).get("cells", [])
                     cell_texts = []
@@ -106,10 +116,7 @@ def _blocks_to_markdown(blocks: list[dict]) -> str:
                             cell_text = str(cell[0])
                         cell_texts.append(cell_text)
                     table_lines.append("| " + " | ".join(cell_texts) + " |")
-                    row_count += 1
-                i += 1
             lines.extend(table_lines)
-            i -= 1
         elif block_type == "paragraph":
             text = _get_rich_text(block.get("paragraph", {}))
             lines.append(text)
@@ -126,8 +133,9 @@ def _blocks_to_markdown(blocks: list[dict]) -> str:
             text = _get_rich_text(block.get("bulleted_list_item", {}))
             lines.append(f"- {text}")
         elif block_type == "numbered_list_item":
+            numbered_index += 1
             text = _get_rich_text(block.get("numbered_list_item", {}))
-            lines.append(f"1. {text}")
+            lines.append(f"{numbered_index}. {text}")
         else:
             i += 1
             continue
@@ -143,7 +151,8 @@ def _get_rich_text(block: dict) -> str:
     for t in rich_text:
         text = t.get("plain_text", "")
         annotations = t.get("annotations", {})
-        href = t.get("href") or t.get("text", {}).get("link")
+        link = t.get("href") or t.get("text", {}).get("link")
+        href = link.get("url") if isinstance(link, dict) else link
 
         if annotations.get("code"):
             text = f"`{text}`"
@@ -269,6 +278,13 @@ def _parse_line_to_blocks(line: str) -> list[dict]:
             "object": "block",
             "type": "bulleted_list_item",
             "bulleted_list_item": {"rich_text": content},
+        }]
+    elif re.match(r"^\d+\. ", line):
+        content = _parse_inline_formatting(re.sub(r"^\d+\. ", "", line))
+        return [{
+            "object": "block",
+            "type": "numbered_list_item",
+            "numbered_list_item": {"rich_text": content},
         }]
     else:
         content = _parse_inline_formatting(line)
