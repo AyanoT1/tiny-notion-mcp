@@ -27,7 +27,8 @@ class MockNotionClient(NotionClient):
 
     def blocks_children_append(self, block_id, children):
         self.appended.extend(children)
-        return {"object": "block", "id": "new-block"}
+        results = [{"id": f"appended-block-{len(self.appended)-len(children)+i}"} for i in range(len(children))]
+        return {"object": "list", "results": results}
 
 
 @pytest.fixture
@@ -356,15 +357,34 @@ class TestReadTables:
 
 
 class TestWriteTables:
-    def test_write_handles_table(self, client):
+    def test_write_creates_table_block(self, client):
         set_client(client)
         notion_write("page-123", "| Name | Age |\n| --- | --- |\n| Alice | 30 |")
-        # Table write falls back to a placeholder paragraph (Notion API limitation)
-        assert not any(b.get("type") == "table" for b in client.appended)
-        placeholder = next(
-            (b for b in client.appended
-             if b.get("type") == "paragraph"
-             and "[TABLE:" in b.get("paragraph", {}).get("rich_text", [{}])[0].get("text", {}).get("content", "")),
-            None,
+        table_block = next((b for b in client.appended if b.get("type") == "table"), None)
+        assert table_block is not None
+        assert table_block["table"]["table_width"] == 2
+
+    def test_write_appends_rows_to_table(self, client):
+        set_client(client)
+        notion_write("page-123", "| Name | Age |\n| --- | --- |\n| Alice | 30 |")
+        table_block = next(b for b in client.appended if b.get("type") == "table")
+        rows = table_block["table"]["children"]
+        assert len(rows) == 2
+        assert rows[0]["table_row"]["cells"][0][0]["text"]["content"] == "Name"
+        assert rows[1]["table_row"]["cells"][0][0]["text"]["content"] == "Alice"
+
+    def test_write_table_header_row_is_bold(self, client):
+        set_client(client)
+        notion_write("page-123", "| Name | Age |\n| --- | --- |\n| Alice | 30 |")
+        table_block = next(b for b in client.appended if b.get("type") == "table")
+        rows = table_block["table"]["children"]
+        assert rows[0]["table_row"]["cells"][0][0]["annotations"]["bold"] is True
+        assert rows[1]["table_row"]["cells"][0][0]["annotations"]["bold"] is False
+
+    def test_write_table_does_not_use_placeholder(self, client):
+        set_client(client)
+        notion_write("page-123", "| Name | Age |\n| --- | --- |\n| Alice | 30 |")
+        assert not any(
+            "[TABLE:" in b.get("paragraph", {}).get("rich_text", [{}])[0].get("text", {}).get("content", "")
+            for b in client.appended if b.get("type") == "paragraph"
         )
-        assert placeholder is not None

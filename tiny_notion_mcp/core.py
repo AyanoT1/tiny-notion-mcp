@@ -72,21 +72,42 @@ def notion_write(page_id: str, markdown: str) -> dict:
     Append markdown to a Notion page.
 
     Converts markdown to blocks and appends to page.
-    Tables fall back to a placeholder paragraph (Notion API limitation).
+    Tables use two API calls: create the table block, then append rows to its ID.
     """
     client = _get_client()
     blocks = _markdown_to_blocks(markdown)
-    final_blocks = []
-    for block in blocks:
+
+    result = {}
+    pending: list[dict] = []
+    i = 0
+
+    def _flush():
+        nonlocal result
+        if pending:
+            result = client.blocks_children_append(page_id, pending)
+            pending.clear()
+
+    while i < len(blocks):
+        block = blocks[i]
         if block.get("type") == "table":
-            final_blocks.append({
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {"rich_text": [{"text": {"content": "[TABLE: see Notion page for actual table]"}}]},
-            })
+            _flush()
+            # Collect rows that follow the table block
+            rows = []
+            i += 1
+            while i < len(blocks) and blocks[i].get("type") == "table_row":
+                rows.append(blocks[i])
+                i += 1
+            # Notion requires rows as children inside the table object at creation time
+            table_with_children = {**block, "table": {**block["table"], "children": rows}}
+            result = client.blocks_children_append(page_id, [table_with_children])
         elif block.get("type") != "table_row":
-            final_blocks.append(block)
-    return client.blocks_children_append(page_id, final_blocks)
+            pending.append(block)
+            i += 1
+        else:
+            i += 1
+
+    _flush()
+    return result
 
 
 def _blocks_to_markdown(blocks: list[dict]) -> str:
@@ -207,37 +228,24 @@ def _markdown_to_blocks(markdown: str) -> list[dict]:
 
 
 def _create_table_blocks(rows: list[list[str]]) -> list[dict]:
-    """Create table blocks. Falls back to paragraph blocks if table creation fails."""
+    """Return [table_block, row_block, ...] for a set of markdown table rows."""
     if not rows:
         return []
 
-    table_paragraphs = []
-    for row in rows:
-        table_paragraphs.append({
-            "object": "block",
-            "type": "paragraph",
-            "paragraph": {"rich_text": [{"text": {"content": " | ".join(row)}}]},
-        })
-
-    num_cols = len(rows[0]) if rows else 1
-
-    table_block = {
+    num_cols = len(rows[0])
+    blocks = [{
         "object": "block",
         "type": "table",
         "table": {
-            "table_rows": len(rows),
             "table_width": num_cols,
             "has_column_header": True,
             "has_row_header": False,
         },
-    }
+    }]
 
-    blocks = [table_block]
-
-    for row in rows:
-        cells = []
-        for cell in row:
-            cells.append([{"text": {"content": cell}}])
+    for idx, row in enumerate(rows):
+        is_header = idx == 0
+        cells = [[{"text": {"content": cell}, "annotations": {"bold": is_header}}] for cell in row]
         blocks.append({
             "object": "block",
             "type": "table_row",
