@@ -1,0 +1,3 @@
+"""Tiny Notion MCP - lightweight Notion MCP server."""
+
+__version__ = "0.1.0"
