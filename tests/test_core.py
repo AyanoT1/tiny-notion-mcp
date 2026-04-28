@@ -151,3 +151,157 @@ class TestStripMetadata:
         assert "cover" not in result
         assert "icon" not in result
         assert "page-1" in result
+
+
+class TestReadRichText:
+    def test_read_handles_bold(self, client):
+        client._blocks["page-123"] = [
+            {
+                "id": "block-1",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{
+                        "plain_text": "Hello world",
+                        "annotations": {"bold": True, "italic": False, "code": False},
+                    }]
+                },
+            },
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "**Hello world**" in result
+
+    def test_read_handles_italic(self, client):
+        client._blocks["page-123"] = [
+            {
+                "id": "block-1",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{
+                        "plain_text": "Hello world",
+                        "annotations": {"bold": False, "italic": True, "code": False},
+                    }]
+                },
+            },
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "*Hello world*" in result
+
+    def test_read_handles_link(self, client):
+        client._blocks["page-123"] = [
+            {
+                "id": "block-1",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{
+                        "plain_text": "click here",
+                        "annotations": {"bold": False, "italic": False, "code": False},
+                        "href": "https://example.com",
+                    }]
+                },
+            },
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "[click here](https://example.com)" in result
+
+    def test_read_handles_bold_and_italic(self, client):
+        client._blocks["page-123"] = [
+            {
+                "id": "block-1",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{
+                        "plain_text": "Hello world",
+                        "annotations": {"bold": True, "italic": True, "code": False},
+                    }]
+                },
+            },
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "***Hello world***" in result
+
+
+class TestWriteRichText:
+    def test_write_handles_bold(self, client):
+        set_client(client)
+        notion_write("page-123", "**Hello world**")
+        assert any(
+            b.get("paragraph", {}).get("rich_text", [{}])[0].get("annotations", {}).get("bold", False)
+            for b in client.appended
+        )
+
+    def test_write_handles_italic(self, client):
+        set_client(client)
+        notion_write("page-123", "*Hello world*")
+        assert any(
+            b.get("paragraph", {}).get("rich_text", [{}])[0].get("annotations", {}).get("italic", False)
+            for b in client.appended
+        )
+
+    def test_write_handles_link(self, client):
+        set_client(client)
+        notion_write("page-123", "[click here](https://example.com)")
+        assert any(
+            b.get("paragraph", {}).get("rich_text", [{}])[0].get("text", {}).get("link", {}).get("url") == "https://example.com"
+            for b in client.appended if b.get("type") == "paragraph"
+        )
+
+    def test_write_handles_bold_and_italic(self, client):
+        set_client(client)
+        notion_write("page-123", "***Hello world***")
+        rich_texts = [
+            b.get("paragraph", {}).get("rich_text", [{}])[0].get("annotations", {})
+            for b in client.appended
+        ]
+        assert any(rt.get("bold", False) and rt.get("italic", False) for rt in rich_texts if rt)
+
+
+class TestReadTables:
+    def test_read_handles_table(self, client):
+        client._blocks["page-123"] = [
+            {
+                "id": "table-block",
+                "type": "table",
+                "table": {
+                    "table_rows": 2,
+                    "has_column_header": True,
+                    "has_row_header": False,
+                },
+            },
+            {
+                "id": "row-1",
+                "type": "table_row",
+                "table_row": {
+                    "cells": [
+                        [{"plain_text": "Name"}],
+                        [{"plain_text": "Age"}],
+                    ],
+                },
+            },
+            {
+                "id": "row-2",
+                "type": "table_row",
+                "table_row": {
+                    "cells": [
+                        [{"plain_text": "Alice"}],
+                        [{"plain_text": "30"}],
+                    ],
+                },
+            },
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "| Name | Age |" in result
+        assert "| Alice | 30 |" in result
+
+
+class TestWriteTables:
+    def test_write_handles_table(self, client):
+        set_client(client)
+        notion_write("page-123", "| Name | Age |\n| --- | --- |\n| Alice | 30 |")
+        table_block = next((b for b in client.appended if b.get("type") == "table"), None)
+        assert table_block is not None
+        assert table_block.get("table", {}).get("table_rows", 0) >= 2
