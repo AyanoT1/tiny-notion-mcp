@@ -4,6 +4,7 @@ from tiny_notion_mcp.core import (
     notion_read,
     notion_write,
     notion_create_page,
+    notion_delete_page,
     set_client,
     NotionClient,
 )
@@ -36,6 +37,11 @@ class MockNotionClient(NotionClient):
         page = {"id": f"new-page-{len(self.created_pages)}", "url": f"https://notion.so/new-page-{len(self.created_pages)}"}
         self.created_pages.append({"parent_id": parent_id, "title": title})
         return page
+
+    def page_trash(self, page_id):
+        self.trashed = getattr(self, "trashed", [])
+        self.trashed.append(page_id)
+        return {"id": page_id, "in_trash": True}
 
 
 @pytest.fixture
@@ -445,6 +451,73 @@ class TestReadChildPage:
         assert "[Subpage: Sub](child-id)" in result
 
 
+class TestBlockSeparators:
+    def test_heading_to_paragraph_no_blank_line(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "heading_1", "heading_1": {"rich_text": [{"plain_text": "Title"}]}},
+            {"id": "b2", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "Body"}]}},
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "# Title\nBody" in result
+        assert "# Title\n\nBody" not in result
+
+    def test_paragraph_to_heading_no_blank_line(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "Intro"}]}},
+            {"id": "b2", "type": "heading_2", "heading_2": {"rich_text": [{"plain_text": "Section"}]}},
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "Intro\n## Section" in result
+        assert "Intro\n\n## Section" not in result
+
+    def test_same_list_type_no_blank_line(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [{"plain_text": "A"}]}},
+            {"id": "b2", "type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [{"plain_text": "B"}]}},
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "- A\n- B" in result
+        assert "- A\n\n- B" not in result
+
+    def test_different_list_types_blank_line(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [{"plain_text": "Bullet"}]}},
+            {"id": "b2", "type": "numbered_list_item", "numbered_list_item": {"rich_text": [{"plain_text": "One"}]}},
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "- Bullet\n\n1. One" in result
+
+    def test_write_blank_line_between_heading_and_text_no_empty_block(self, client):
+        set_client(client)
+        notion_write("page-123", "# Title\n\nSome text")
+        empty_paras = [
+            b for b in client.appended
+            if b.get("type") == "paragraph"
+            and not any(
+                rt.get("text", {}).get("content", "") or rt.get("plain_text", "")
+                for rt in b.get("paragraph", {}).get("rich_text", [])
+            )
+        ]
+        assert len(empty_paras) == 0
+
+    def test_write_blank_line_before_heading_no_empty_block(self, client):
+        set_client(client)
+        notion_write("page-123", "Some text\n\n# Heading")
+        empty_paras = [
+            b for b in client.appended
+            if b.get("type") == "paragraph"
+            and not any(
+                rt.get("text", {}).get("content", "") or rt.get("plain_text", "")
+                for rt in b.get("paragraph", {}).get("rich_text", [])
+            )
+        ]
+        assert len(empty_paras) == 0
+
+
 class TestCreatePage:
     def test_create_page_returns_toon_format(self, client):
         set_client(client)
@@ -469,3 +542,51 @@ class TestCreatePage:
         set_client(client)
         notion_create_page("parent-123", "My New Page")
         assert len(client.appended) == 0
+
+
+class TestDividers:
+    def test_read_divider_renders_as_hr(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "Before"}]}},
+            {"id": "b2", "type": "divider", "divider": {}},
+            {"id": "b3", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "After"}]}},
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "---" in result
+        assert "Before\n---\nAfter" in result
+
+    def test_write_hr_creates_divider_block(self, client):
+        set_client(client)
+        notion_write("page-123", "Before\n---\nAfter")
+        types = [b.get("type") for b in client.appended]
+        assert "divider" in types
+
+    def test_write_hr_divider_has_correct_structure(self, client):
+        set_client(client)
+        notion_write("page-123", "---")
+        divider = next(b for b in client.appended if b.get("type") == "divider")
+        assert divider == {"object": "block", "type": "divider", "divider": {}}
+
+    def test_divider_no_blank_line_with_adjacent_blocks(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "heading_2", "heading_2": {"rich_text": [{"plain_text": "Section"}]}},
+            {"id": "b2", "type": "divider", "divider": {}},
+            {"id": "b3", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "Text"}]}},
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "## Section\n---\nText" in result
+
+
+class TestDeletePage:
+    def test_delete_page_calls_page_trash(self, client):
+        set_client(client)
+        notion_delete_page("page-abc")
+        assert "page-abc" in client.trashed
+
+    def test_delete_page_returns_confirmation(self, client):
+        set_client(client)
+        result = notion_delete_page("page-abc")
+        assert "page-abc" in result
+        assert "Trashed" in result

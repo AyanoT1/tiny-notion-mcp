@@ -22,6 +22,10 @@ class NotionClient:
         """Create a new page under parent_id."""
         ...
 
+    def page_trash(self, page_id: str) -> dict:
+        """Trash (move to bin) a page."""
+        ...
+
 
 _client: NotionClient | None = None
 
@@ -118,6 +122,19 @@ def notion_write(page_id: str, markdown: str) -> dict:
     return result
 
 
+def notion_delete_page(page_id: str) -> str:
+    """
+    Trash a Notion page (moves it to Notion's trash — reversible from the Notion UI).
+
+    WARNING: This is a destructive operation. The page will no longer appear in search
+    or reads. It can be restored from Notion's trash within 30 days.
+    Returns a confirmation string with the trashed page ID.
+    """
+    client = _get_client()
+    client.page_trash(page_id)
+    return f"Trashed page {page_id}"
+
+
 def notion_create_page(parent_id: str, title: str, markdown: str = "") -> str:
     """
     Create a subpage under parent_id with the given title.
@@ -133,9 +150,23 @@ def notion_create_page(parent_id: str, title: str, markdown: str = "") -> str:
     return f"{title} | {page_id} | {url}"
 
 
+_LIST_TYPES = {"bulleted_list_item", "numbered_list_item"}
+_HEADING_TYPES = {"heading_1", "heading_2", "heading_3"}
+_SINGLE_NEWLINE_TYPES = _HEADING_TYPES | {"divider"}
+
+
+def _block_separator(prev_type: str, curr_type: str) -> str:
+    """Return the newline separator to use between two consecutive block types."""
+    if prev_type in _SINGLE_NEWLINE_TYPES or curr_type in _SINGLE_NEWLINE_TYPES:
+        return "\n"
+    if prev_type in _LIST_TYPES and curr_type in _LIST_TYPES:
+        return "\n" if prev_type == curr_type else "\n\n"
+    return "\n"
+
+
 def _blocks_to_markdown(blocks: list[dict]) -> str:
     """Convert Notion blocks to markdown."""
-    lines = []
+    entries: list[tuple[str, str]] = []  # (block_type, text)
     i = 0
     numbered_index = 0
     while i < len(blocks):
@@ -160,36 +191,43 @@ def _blocks_to_markdown(blocks: list[dict]) -> str:
                             cell_text = str(cell[0])
                         cell_texts.append(cell_text)
                     table_lines.append("| " + " | ".join(cell_texts) + " |")
-            lines.extend(table_lines)
+            entries.append(("table", "\n".join(table_lines)))
         elif block_type == "paragraph":
             text = _get_rich_text(block.get("paragraph", {}))
-            lines.append(text)
+            entries.append(("paragraph", text))
         elif block_type == "heading_1":
             text = _get_rich_text(block.get("heading_1", {}))
-            lines.append(f"# {text}")
+            entries.append(("heading_1", f"# {text}"))
         elif block_type == "heading_2":
             text = _get_rich_text(block.get("heading_2", {}))
-            lines.append(f"## {text}")
+            entries.append(("heading_2", f"## {text}"))
         elif block_type == "heading_3":
             text = _get_rich_text(block.get("heading_3", {}))
-            lines.append(f"### {text}")
+            entries.append(("heading_3", f"### {text}"))
         elif block_type == "child_page":
             child_title = block.get("child_page", {}).get("title", "")
             child_id = block.get("id", "")
-            lines.append(f"[Subpage: {child_title}]({child_id})")
+            entries.append(("child_page", f"[Subpage: {child_title}]({child_id})"))
         elif block_type == "bulleted_list_item":
             text = _get_rich_text(block.get("bulleted_list_item", {}))
-            lines.append(f"- {text}")
+            entries.append(("bulleted_list_item", f"- {text}"))
         elif block_type == "numbered_list_item":
             numbered_index += 1
             text = _get_rich_text(block.get("numbered_list_item", {}))
-            lines.append(f"{numbered_index}. {text}")
+            entries.append(("numbered_list_item", f"{numbered_index}. {text}"))
+        elif block_type == "divider":
+            entries.append(("divider", "---"))
         else:
             i += 1
             continue
         i += 1
 
-    return "\n\n".join(lines)
+    if not entries:
+        return ""
+    result = entries[0][1]
+    for (prev_type, _), (curr_type, text) in zip(entries, entries[1:]):
+        result += _block_separator(prev_type, curr_type) + text
+    return result
 
 
 def _get_rich_text(block: dict) -> str:
@@ -233,11 +271,6 @@ def _markdown_to_blocks(markdown: str) -> list[dict]:
             if table_rows:
                 non_table_blocks.extend(_create_table_blocks(table_rows))
                 table_rows = []
-            non_table_blocks.append({
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {"rich_text": [{"text": {"content": ""}}]},
-            })
         elif line.startswith("|") and line.endswith("|"):
             if not any(x in line for x in ["---", ":-", ":-:"]):
                 cells = [c.strip() for c in line.split("|")[1:-1]]
@@ -286,6 +319,8 @@ def _parse_line_to_blocks(line: str) -> list[dict]:
     """Parse a single line of markdown to blocks (with inline formatting)."""
     import re
 
+    if line == "---":
+        return [{"object": "block", "type": "divider", "divider": {}}]
     if line.startswith("# "):
         content = _parse_inline_formatting(line[2:])
         return [{

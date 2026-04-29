@@ -5,7 +5,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from tiny_notion_mcp.core import notion_search, notion_read, notion_write, notion_create_page, NotionClient
+from tiny_notion_mcp.core import notion_search, notion_read, notion_write, notion_create_page, notion_delete_page, NotionClient
 
 
 class NotionClientImpl(NotionClient):
@@ -33,6 +33,9 @@ class NotionClientImpl(NotionClient):
             parent={"type": "page_id", "page_id": parent_id},
             properties={"title": {"title": [{"text": {"content": title}}]}},
         )
+
+    def page_trash(self, page_id: str) -> dict:
+        return self._client.pages.update(page_id=page_id, **{"in_trash": True})
 
 
 def _create_client() -> NotionClient:
@@ -96,6 +99,21 @@ async def list_tools() -> list[Tool]:
                 "required": ["parent_id", "title"],
             },
         ),
+        Tool(
+            name="notion_delete_page",
+            description=(
+                "⚠️ DESTRUCTIVE — moves a Notion page to trash. "
+                "The page is recoverable from Notion's trash within 30 days. "
+                "Only call this when the user explicitly asks to delete a page."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "page_id": {"type": "string", "description": "ID of the page to trash"},
+                },
+                "required": ["page_id"],
+            },
+        ),
     ]
 
 
@@ -124,21 +142,27 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             title=arguments["title"],
             markdown=arguments.get("markdown", ""),
         )
+    elif name == "notion_delete_page":
+        result = notion_delete_page(page_id=arguments["page_id"])
     else:
         raise ValueError(f"Unknown tool: {name}")
 
     return [TextContent(type="text", text=str(result))]
 
 
-async def main():
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(
-            read_stream,
-            write_stream,
-            app.create_initialization_options(),
-        )
+def main():
+    import asyncio
+
+    async def _run():
+        async with stdio_server() as (read_stream, write_stream):
+            await app.run(
+                read_stream,
+                write_stream,
+                app.create_initialization_options(),
+            )
+
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()

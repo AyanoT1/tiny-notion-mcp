@@ -12,6 +12,7 @@ Instead of returning raw Notion API JSON, every tool returns the smallest useful
 | `notion_read` | Read a page as Markdown. |
 | `notion_write` | Append Markdown to an existing page. |
 | `notion_create_page` | Create a sub-page under a parent, optionally with content. |
+| `notion_delete_page` | ⚠️ Move a page to Notion's trash (recoverable within 30 days). |
 
 ### TOON format
 
@@ -34,6 +35,7 @@ This keeps search responses to a single line per result instead of hundreds of t
 | Bulleted list item | `- item` |
 | Numbered list item | `1. item`, `2. item`, … |
 | Code block | ` ```lang … ``` ` |
+| Divider | `---` |
 | Table | Pipe-delimited rows |
 | Child page | `[Subpage: title](id)` |
 
@@ -47,7 +49,6 @@ The same block types are supported on write. Markdown is parsed and appended to 
 
 The following block types are recognised by Notion but not yet handled. They are silently skipped on read and cannot be written:
 
-- Dividers (`---`)
 - Block quotes
 - To-do / checkbox lists
 - Callout blocks
@@ -57,49 +58,35 @@ The following block types are recognised by Notion but not yet handled. They are
 
 ## Known limitations
 
-- **Empty paragraph blocks between different list types are not round-tripped.** When a page has an explicit empty paragraph separating, say, a bulleted list from a numbered list, that separator is lost on a read → write cycle. The `"\n\n"` that Markdown already places between blocks is visually equivalent but does not produce a Notion empty-paragraph block on write. This is an inherent limitation of a flat Markdown representation and will stay until a v2 format is designed.
+- **Empty paragraph blocks are not round-tripped.** Explicit empty paragraphs used as spacers in Notion are lost on a read → write cycle. This is an inherent limitation of a flat Markdown representation.
 
 - **Table header flag is not round-tripped.** Notion tables can be created without a column-header row (`has_column_header: false`). The current writer always sets `has_column_header: true` because standard Markdown tables imply a header. Tables written back will look identical but have the header flag set.
 
 ## Requirements
 
-- Python 3.12+
-- A Notion integration token with read/write access to the pages you want to use
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) installed
+- A Notion integration token ([create one here](https://www.notion.so/profile/integrations))
 
 ## Installation
 
-```bash
-# From source
-git clone https://github.com/your-username/tiny-notion-mcp
-cd tiny-notion-mcp
-pip install .
-```
+### Claude Code
 
-Or install directly with `uv`:
+One command — no cloning needed:
 
 ```bash
-uv tool install .
+claude mcp add tiny-notion-mcp -e NOTION_TOKEN=secret_... -- uvx --from git+https://github.com/AyanoT1/tiny-notion-mcp tiny-notion-mcp
 ```
 
-## Configuration
+### Claude Desktop
 
-Set your Notion integration token as an environment variable:
-
-```bash
-export NOTION_TOKEN=secret_...
-```
-
-`NOTION_API_KEY` is accepted as an alias.
-
-### Claude Desktop / Claude Code
-
-Add the server to your MCP configuration:
+Add this to your `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "tiny-notion-mcp": {
-      "command": "tiny-notion-mcp",
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/AyanoT1/tiny-notion-mcp", "tiny-notion-mcp"],
       "env": {
         "NOTION_TOKEN": "secret_..."
       }
@@ -108,31 +95,24 @@ Add the server to your MCP configuration:
 }
 ```
 
-If you installed with `uv` into an isolated environment, use the full path:
-
-```json
-{
-  "mcpServers": {
-    "tiny-notion-mcp": {
-      "command": "uv",
-      "args": ["run", "--", "tiny-notion-mcp"],
-      "env": {
-        "NOTION_TOKEN": "secret_..."
-      }
-    }
-  }
-}
-```
+`uvx` handles downloading and running the package automatically — no manual install step required. `NOTION_API_KEY` is accepted as an alias for `NOTION_TOKEN`.
 
 ## Development
 
 ```bash
-# Install with dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest
+git clone https://github.com/AyanoT1/tiny-notion-mcp
+cd tiny-notion-mcp
+uv sync --dev
+uv run pytest
 ```
+
+To update a local Claude Code installation after making changes:
+
+```bash
+uv tool install . --force
+```
+
+Then reconnect the MCP server from Claude Code's `/mcp` menu.
 
 Tests use a stub `NotionClient` and make no real API calls.
 
