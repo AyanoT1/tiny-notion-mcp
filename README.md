@@ -36,6 +36,9 @@ This keeps search responses to a single line per result instead of hundreds of t
 | Numbered list item | `1. item`, `2. item`, … |
 | Code block | ` ```lang … ``` ` |
 | Divider | `---` |
+| To-do item | `[ ] text` / `[x] text` |
+| Block quote | `> text` |
+| Callout | `> [emoji] text` |
 | Table | Pipe-delimited rows |
 | Child page | `[Subpage: title](id)` |
 
@@ -49,9 +52,6 @@ The same block types are supported on write. Markdown is parsed and appended to 
 
 The following block types are recognised by Notion but not yet handled. They are silently skipped on read and cannot be written:
 
-- Block quotes
-- To-do / checkbox lists
-- Callout blocks
 - Toggle lists
 - Table of contents
 - Files, images, and videos

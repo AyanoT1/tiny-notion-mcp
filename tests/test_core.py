@@ -579,6 +579,122 @@ class TestDividers:
         assert "## Section\n---\nText" in result
 
 
+class TestTodoList:
+    def test_read_unchecked_todo(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "to_do", "to_do": {"rich_text": [{"plain_text": "Buy milk"}], "checked": False}},
+        ]
+        set_client(client)
+        assert "[ ] Buy milk" in notion_read("page-123")
+
+    def test_read_checked_todo(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "to_do", "to_do": {"rich_text": [{"plain_text": "Done"}], "checked": True}},
+        ]
+        set_client(client)
+        assert "[x] Done" in notion_read("page-123")
+
+    def test_read_consecutive_todos_no_blank_line(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "to_do", "to_do": {"rich_text": [{"plain_text": "A"}], "checked": False}},
+            {"id": "b2", "type": "to_do", "to_do": {"rich_text": [{"plain_text": "B"}], "checked": False}},
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "[ ] A\n[ ] B" in result
+        assert "[ ] A\n\n[ ] B" not in result
+
+    def test_write_unchecked_todo(self, client):
+        set_client(client)
+        notion_write("page-123", "[ ] Buy milk")
+        todo = next(b for b in client.appended if b.get("type") == "to_do")
+        assert todo["to_do"]["checked"] is False
+        assert todo["to_do"]["rich_text"][0]["text"]["content"] == "Buy milk"
+
+    def test_write_checked_todo(self, client):
+        set_client(client)
+        notion_write("page-123", "[x] Done")
+        todo = next(b for b in client.appended if b.get("type") == "to_do")
+        assert todo["to_do"]["checked"] is True
+
+    def test_todo_to_bullet_gets_blank_line(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "to_do", "to_do": {"rich_text": [{"plain_text": "Task"}], "checked": False}},
+            {"id": "b2", "type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [{"plain_text": "Bullet"}]}},
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "[ ] Task\n\n- Bullet" in result
+
+
+class TestBlockQuote:
+    def test_read_quote(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "quote", "quote": {"rich_text": [{"plain_text": "Wisdom"}]}},
+        ]
+        set_client(client)
+        assert "> Wisdom" in notion_read("page-123")
+
+    def test_write_quote(self, client):
+        set_client(client)
+        notion_write("page-123", "> A wise saying")
+        quote = next(b for b in client.appended if b.get("type") == "quote")
+        assert quote["quote"]["rich_text"][0]["text"]["content"] == "A wise saying"
+
+    def test_quote_roundtrip(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "quote", "quote": {"rich_text": [{"plain_text": "Roundtrip"}]}},
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        notion_write("page-123", result)
+        quote = next(b for b in client.appended if b.get("type") == "quote")
+        assert quote["quote"]["rich_text"][0]["text"]["content"] == "Roundtrip"
+
+
+class TestCallout:
+    def test_read_callout_with_emoji(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "callout", "callout": {
+                "rich_text": [{"plain_text": "Watch out"}],
+                "icon": {"type": "emoji", "emoji": "⚠️"},
+            }},
+        ]
+        set_client(client)
+        assert "> [⚠️] Watch out" in notion_read("page-123")
+
+    def test_read_callout_defaults_to_bulb(self, client):
+        client._blocks["page-123"] = [
+            {"id": "b1", "type": "callout", "callout": {
+                "rich_text": [{"plain_text": "Info"}],
+                "icon": {"type": "external", "external": {"url": "..."}},
+            }},
+        ]
+        set_client(client)
+        assert "> [💡] Info" in notion_read("page-123")
+
+    def test_write_callout(self, client):
+        set_client(client)
+        notion_write("page-123", "> [⚠️] Watch out")
+        callout = next(b for b in client.appended if b.get("type") == "callout")
+        assert callout["callout"]["icon"]["emoji"] == "⚠️"
+        assert callout["callout"]["rich_text"][0]["text"]["content"] == "Watch out"
+
+    def test_callout_not_parsed_as_quote(self, client):
+        set_client(client)
+        notion_write("page-123", "> [💡] A tip")
+        types = [b.get("type") for b in client.appended]
+        assert "callout" in types
+        assert "quote" not in types
+
+    def test_plain_quote_not_parsed_as_callout(self, client):
+        set_client(client)
+        notion_write("page-123", "> Just a quote")
+        types = [b.get("type") for b in client.appended]
+        assert "quote" in types
+        assert "callout" not in types
+
+
 class TestDeletePage:
     def test_delete_page_calls_page_trash(self, client):
         set_client(client)

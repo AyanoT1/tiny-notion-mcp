@@ -150,7 +150,7 @@ def notion_create_page(parent_id: str, title: str, markdown: str = "") -> str:
     return f"{title} | {page_id} | {url}"
 
 
-_LIST_TYPES = {"bulleted_list_item", "numbered_list_item"}
+_LIST_TYPES = {"bulleted_list_item", "numbered_list_item", "to_do"}
 _HEADING_TYPES = {"heading_1", "heading_2", "heading_3"}
 _SINGLE_NEWLINE_TYPES = _HEADING_TYPES | {"divider"}
 
@@ -215,6 +215,19 @@ def _blocks_to_markdown(blocks: list[dict]) -> str:
             numbered_index += 1
             text = _get_rich_text(block.get("numbered_list_item", {}))
             entries.append(("numbered_list_item", f"{numbered_index}. {text}"))
+        elif block_type == "to_do":
+            text = _get_rich_text(block.get("to_do", {}))
+            checked = block.get("to_do", {}).get("checked", False)
+            mark = "x" if checked else " "
+            entries.append(("to_do", f"[{mark}] {text}"))
+        elif block_type == "quote":
+            text = _get_rich_text(block.get("quote", {}))
+            entries.append(("quote", f"> {text}"))
+        elif block_type == "callout":
+            text = _get_rich_text(block.get("callout", {}))
+            icon = block.get("callout", {}).get("icon", {})
+            emoji = icon.get("emoji", "💡") if icon.get("type") == "emoji" else "💡"
+            entries.append(("callout", f"> [{emoji}] {text}"))
         elif block_type == "divider":
             entries.append(("divider", "---"))
         else:
@@ -321,6 +334,23 @@ def _parse_line_to_blocks(line: str) -> list[dict]:
 
     if line == "---":
         return [{"object": "block", "type": "divider", "divider": {}}]
+    if re.match(r"^\[[ x]\] ", line):
+        checked = line[1] == "x"
+        content = _parse_inline_formatting(line[4:])
+        return [{"object": "block", "type": "to_do", "to_do": {"rich_text": content, "checked": checked}}]
+    if re.match(r"^> \[.+?\] ", line):
+        # Callout: "> [emoji] text"
+        m = re.match(r"^> \[(.+?)\] (.*)", line)
+        emoji = m.group(1) if m else "💡"
+        text = m.group(2) if m else line[2:]
+        content = _parse_inline_formatting(text)
+        return [{"object": "block", "type": "callout", "callout": {
+            "rich_text": content,
+            "icon": {"type": "emoji", "emoji": emoji},
+        }}]
+    if line.startswith("> "):
+        content = _parse_inline_formatting(line[2:])
+        return [{"object": "block", "type": "quote", "quote": {"rich_text": content}}]
     if line.startswith("# "):
         content = _parse_inline_formatting(line[2:])
         return [{
