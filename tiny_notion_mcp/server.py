@@ -5,7 +5,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from tiny_notion_mcp.core import notion_search, notion_read, notion_write, notion_create_page, notion_delete_page, notion_query_database, NotionClient
+from tiny_notion_mcp.core import notion_search, notion_read, notion_write, notion_create_page, notion_update_page, notion_delete_page, notion_query_database, NotionClient
 
 
 class NotionClientImpl(NotionClient):
@@ -16,7 +16,6 @@ class NotionClientImpl(NotionClient):
     def search(self, query: str, limit: int = 10) -> list[dict]:
         response = self._client.search(
             query=query,
-            filter={"property": "object", "value": "page"},
             page_size=limit,
         )
         return response.get("results", [])
@@ -28,20 +27,33 @@ class NotionClientImpl(NotionClient):
     def blocks_children_append(self, block_id: str, children: list[dict]) -> dict:
         return self._client.blocks.children.append(block_id=block_id, children=children)
 
-    def pages_create(self, parent_id: str, title: str) -> dict:
+    def pages_create(self, parent_id: str, title: str, parent_type: str = "page_id", extra_properties: dict | None = None) -> dict:
+        parent = {"type": parent_type, parent_type: parent_id}
+        if parent_type == "database_id":
+            props = dict(extra_properties or {})
+            # Inject title into a "Name" property if not already present
+            title_key = next((k for k, v in props.items() if isinstance(v, dict) and "title" in v), "Name")
+            if title_key not in props:
+                props[title_key] = {"title": [{"text": {"content": title}}]}
+            return self._client.pages.create(parent=parent, properties=props)
         return self._client.pages.create(
             parent={"type": "page_id", "page_id": parent_id},
             properties={"title": {"title": [{"text": {"content": title}}]}},
         )
 
+    def pages_update(self, page_id: str, properties: dict) -> dict:
+        return self._client.pages.update(page_id=page_id, properties=properties)
+
     def page_trash(self, page_id: str) -> dict:
         return self._client.pages.update(page_id=page_id, **{"in_trash": True})
 
     def database_query(self, database_id: str, limit: int = 100) -> list[dict]:
-        response = self._client.databases.query(
-            database_id=database_id,
-            page_size=min(limit, 100),
-        )
+        db = self._client.databases.retrieve(database_id)
+        data_sources = db.get("data_sources", [])
+        if not data_sources:
+            raise RuntimeError(f"No data source found for database {database_id}")
+        data_source_id = data_sources[0]["id"]
+        response = self._client.data_sources.query(data_source_id, page_size=min(limit, 100))
         return response.get("results", [])
 
 
@@ -95,15 +107,52 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="notion_create_page",
-            description="Create a new subpage under a parent page. Returns TOON format with the new page ID.",
+            description=(
+                "Create a new page or database entry. "
+                "Set parent_type='page_id' (default) for a subpage, or 'database_id' to insert a row into a database. "
+                "For database entries, pass extra properties (Status, Date, etc.) as Notion property objects via the 'properties' field. "
+                "Returns TOON format with the new page ID."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "parent_id": {"type": "string", "description": "Parent page ID"},
-                    "title": {"type": "string", "description": "Title of the new page"},
-                    "markdown": {"type": "string", "description": "Optional content to write to the new page"},
+                    "parent_id": {"type": "string", "description": "Parent page ID or database ID"},
+                    "title": {"type": "string", "description": "Title / Name of the new page or entry"},
+                    "parent_type": {
+                        "type": "string",
+                        "enum": ["page_id", "database_id"],
+                        "default": "page_id",
+                        "description": "Whether parent_id is a page ('page_id') or database ('database_id')",
+                    },
+                    "properties": {
+                        "type": "object",
+                        "description": "Additional Notion property objects for database entries (e.g. Status, Date, Category)",
+                        "additionalProperties": True,
+                    },
+                    "markdown": {"type": "string", "description": "Optional markdown content to write to the new page"},
                 },
                 "required": ["parent_id", "title"],
+            },
+        ),
+        Tool(
+            name="notion_update_page",
+            description=(
+                "Update properties of a Notion page or database entry. "
+                "Pass a dict of Notion property objects, e.g. "
+                "{\"Status\": {\"status\": {\"name\": \"Done\"}}} or "
+                "{\"Date\": {\"date\": {\"start\": \"2026-04-30\"}}}."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "page_id": {"type": "string", "description": "ID of the page or database entry to update"},
+                    "properties": {
+                        "type": "object",
+                        "description": "Notion property objects to update",
+                        "additionalProperties": True,
+                    },
+                },
+                "required": ["page_id", "properties"],
             },
         ),
         Tool(
@@ -164,6 +213,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             parent_id=arguments["parent_id"],
             title=arguments["title"],
             markdown=arguments.get("markdown", ""),
+            parent_type=arguments.get("parent_type", "page_id"),
+            properties=arguments.get("properties"),
+        )
+    elif name == "notion_update_page":
+        result = notion_update_page(
+            page_id=arguments["page_id"],
+            properties=arguments["properties"],
         )
     elif name == "notion_query_database":
         result = notion_query_database(

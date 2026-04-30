@@ -18,8 +18,8 @@ class NotionClient:
         """Append blocks to a page."""
         ...
 
-    def pages_create(self, parent_id: str, title: str) -> dict:
-        """Create a new page under parent_id."""
+    def pages_create(self, parent_id: str, title: str, parent_type: str = "page_id", extra_properties: dict | None = None) -> dict:
+        """Create a new page or database entry under parent_id."""
         ...
 
     def page_trash(self, page_id: str) -> dict:
@@ -28,6 +28,10 @@ class NotionClient:
 
     def database_query(self, database_id: str, limit: int = 100) -> list[dict]:
         """Query a database and return page results."""
+        ...
+
+    def pages_update(self, page_id: str, properties: dict) -> dict:
+        """Update page properties."""
         ...
 
 
@@ -59,14 +63,19 @@ def notion_search(query: str, limit: int = 10) -> str:
     
     lines = []
     for r in results:
-        title = r.get("properties", {}).get("title", {}).get("title", [])
-        title_text = "".join(t.get("plain_text", "") for t in title)
+        obj_type = r.get("object", "page")
+        if obj_type == "database":
+            title_parts = r.get("title", [])
+        else:
+            title_parts = r.get("properties", {}).get("title", {}).get("title", [])
+        title_text = "".join(t.get("plain_text", "") for t in title_parts)
 
         parent = r.get("parent", {})
         parent_id = parent.get("page_id") or parent.get("database_id") or ""
         parent_part = f" | parent:{parent_id}" if parent_id else ""
+        type_part = f" [database]" if obj_type == "database" else ""
 
-        lines.append(f"{title_text} | {r.get('id', '')} | {r.get('url', '')}{parent_part}")
+        lines.append(f"{title_text}{type_part} | {r.get('id', '')} | {r.get('url', '')}{parent_part}")
     
     return "\n".join(lines)
 
@@ -246,19 +255,33 @@ def _extract_property_value(prop: dict) -> str:
     return ""
 
 
-def notion_create_page(parent_id: str, title: str, markdown: str = "") -> str:
+def notion_create_page(parent_id: str, title: str, markdown: str = "", parent_type: str = "page_id", properties: dict | None = None) -> str:
     """
-    Create a subpage under parent_id with the given title.
+    Create a subpage (parent_type='page_id') or database entry (parent_type='database_id').
+    For database entries, pass extra properties as a dict of Notion property objects.
     Optionally appends markdown content to the new page.
     Returns TOON format: Title | ID | URL
     """
     client = _get_client()
-    page = client.pages_create(parent_id, title)
+    page = client.pages_create(parent_id, title, parent_type=parent_type, extra_properties=properties)
     page_id = page.get("id", "")
     url = page.get("url", "")
     if markdown:
         notion_write(page_id, markdown)
     return f"{title} | {page_id} | {url}"
+
+
+def notion_update_page(page_id: str, properties: dict) -> str:
+    """
+    Update properties of a Notion page or database entry.
+    properties must be a dict of Notion property objects, e.g.:
+      {"Status": {"status": {"name": "Done"}}}
+      {"Date": {"date": {"start": "2026-04-30"}}}
+    Returns a confirmation string.
+    """
+    client = _get_client()
+    client.pages_update(page_id, properties)
+    return f"Updated page {page_id}"
 
 
 _LIST_TYPES = {"bulleted_list_item", "numbered_list_item", "to_do"}
