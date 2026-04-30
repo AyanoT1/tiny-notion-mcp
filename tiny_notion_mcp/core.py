@@ -26,6 +26,10 @@ class NotionClient:
         """Trash (move to bin) a page."""
         ...
 
+    def database_query(self, database_id: str, limit: int = 100) -> list[dict]:
+        """Query a database and return page results."""
+        ...
+
 
 _client: NotionClient | None = None
 
@@ -133,6 +137,113 @@ def notion_delete_page(page_id: str) -> str:
     client = _get_client()
     client.page_trash(page_id)
     return f"Trashed page {page_id}"
+
+
+def notion_query_database(database_id: str, limit: int = 100) -> str:
+    """
+    Query a Notion database and return results as a markdown table.
+
+    Each row is one database entry. Columns match the database properties in
+    their defined order. An ID column is appended for follow-up tool calls.
+    Returns 'No results.' if the database is empty or has no matching entries.
+    """
+    client = _get_client()
+    results = client.database_query(database_id, limit=limit)
+
+    if not results:
+        return "No results."
+
+    columns = list(results[0].get("properties", {}).keys())
+    header = "| " + " | ".join(columns + ["ID"]) + " |"
+    separator = "| " + " | ".join(["---"] * (len(columns) + 1)) + " |"
+
+    rows = [header, separator]
+    for page in results:
+        props = page.get("properties", {})
+        values = [_extract_property_value(props.get(col, {})) for col in columns]
+        values.append(page.get("id", ""))
+        rows.append("| " + " | ".join(v.replace("|", "\\|") for v in values) + " |")
+
+    return "\n".join(rows)
+
+
+def _extract_property_value(prop: dict) -> str:
+    """Normalize any Notion property object to a plain string."""
+    t = prop.get("type", "")
+
+    if t == "title":
+        return "".join(r.get("plain_text", "") for r in prop.get("title", []))
+    if t == "rich_text":
+        return "".join(r.get("plain_text", "") for r in prop.get("rich_text", []))
+    if t == "number":
+        v = prop.get("number")
+        return str(v) if v is not None else ""
+    if t == "select":
+        s = prop.get("select")
+        return s.get("name", "") if s else ""
+    if t == "multi_select":
+        return ", ".join(s.get("name", "") for s in prop.get("multi_select", []))
+    if t == "status":
+        s = prop.get("status")
+        return s.get("name", "") if s else ""
+    if t == "date":
+        d = prop.get("date")
+        if not d:
+            return ""
+        start = d.get("start", "")
+        end = d.get("end")
+        return f"{start} → {end}" if end else start
+    if t == "checkbox":
+        return "✓" if prop.get("checkbox") else "✗"
+    if t == "people":
+        return ", ".join(p.get("name", p.get("id", "")) for p in prop.get("people", []))
+    if t == "relation":
+        return ", ".join(r.get("id", "") for r in prop.get("relation", []))
+    if t == "url":
+        return prop.get("url") or ""
+    if t == "email":
+        return prop.get("email") or ""
+    if t == "phone_number":
+        return prop.get("phone_number") or ""
+    if t == "formula":
+        f = prop.get("formula", {})
+        ft = f.get("type", "")
+        if ft == "string":
+            return f.get("string") or ""
+        if ft == "number":
+            v = f.get("number")
+            return str(v) if v is not None else ""
+        if ft == "boolean":
+            return "✓" if f.get("boolean") else "✗"
+        if ft == "date":
+            d = f.get("date")
+            return d.get("start", "") if d else ""
+        return ""
+    if t == "rollup":
+        r = prop.get("rollup", {})
+        rt = r.get("type", "")
+        if rt == "number":
+            v = r.get("number")
+            return str(v) if v is not None else ""
+        if rt == "array":
+            return f"[{len(r.get('array', []))} items]"
+        return ""
+    if t in ("created_time", "last_edited_time"):
+        return prop.get(t, "")
+    if t == "created_by":
+        u = prop.get("created_by", {})
+        return u.get("name", u.get("id", ""))
+    if t == "last_edited_by":
+        u = prop.get("last_edited_by", {})
+        return u.get("name", u.get("id", ""))
+    if t == "unique_id":
+        uid = prop.get("unique_id", {})
+        prefix = uid.get("prefix")
+        number = uid.get("number", "")
+        return f"{prefix}-{number}" if prefix else str(number)
+    if t == "files":
+        return ", ".join(f.get("name", "") for f in prop.get("files", []))
+    return ""
 
 
 def notion_create_page(parent_id: str, title: str, markdown: str = "") -> str:

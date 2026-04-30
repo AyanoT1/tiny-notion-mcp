@@ -12,6 +12,7 @@ Instead of returning raw Notion API JSON, every tool returns the smallest useful
 | `notion_read` | Read a page as Markdown. |
 | `notion_write` | Append Markdown to an existing page. |
 | `notion_create_page` | Create a sub-page under a parent, optionally with content. |
+| `notion_query_database` | Query a database and return results as a markdown table. |
 | `notion_delete_page` | ⚠️ Move a page to Notion's trash (recoverable within 30 days). |
 
 ### TOON format

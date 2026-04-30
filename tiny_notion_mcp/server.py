@@ -5,7 +5,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from tiny_notion_mcp.core import notion_search, notion_read, notion_write, notion_create_page, notion_delete_page, NotionClient
+from tiny_notion_mcp.core import notion_search, notion_read, notion_write, notion_create_page, notion_delete_page, notion_query_database, NotionClient
 
 
 class NotionClientImpl(NotionClient):
@@ -36,6 +36,13 @@ class NotionClientImpl(NotionClient):
 
     def page_trash(self, page_id: str) -> dict:
         return self._client.pages.update(page_id=page_id, **{"in_trash": True})
+
+    def database_query(self, database_id: str, limit: int = 100) -> list[dict]:
+        response = self._client.databases.query(
+            database_id=database_id,
+            page_size=min(limit, 100),
+        )
+        return response.get("results", [])
 
 
 def _create_client() -> NotionClient:
@@ -100,6 +107,22 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="notion_query_database",
+            description=(
+                "Query a Notion database and return results as a markdown table. "
+                "Each row is one entry; columns match the database properties. "
+                "An ID column is appended for follow-up reads or writes."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "database_id": {"type": "string", "description": "Notion database ID"},
+                    "limit": {"type": "integer", "description": "Max rows to return (default 100, max 100)", "default": 100},
+                },
+                "required": ["database_id"],
+            },
+        ),
+        Tool(
             name="notion_delete_page",
             description=(
                 "⚠️ DESTRUCTIVE — moves a Notion page to trash. "
@@ -141,6 +164,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             parent_id=arguments["parent_id"],
             title=arguments["title"],
             markdown=arguments.get("markdown", ""),
+        )
+    elif name == "notion_query_database":
+        result = notion_query_database(
+            database_id=arguments["database_id"],
+            limit=arguments.get("limit", 100),
         )
     elif name == "notion_delete_page":
         result = notion_delete_page(page_id=arguments["page_id"])

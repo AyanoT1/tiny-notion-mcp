@@ -5,6 +5,7 @@ from tiny_notion_mcp.core import (
     notion_write,
     notion_create_page,
     notion_delete_page,
+    notion_query_database,
     set_client,
     NotionClient,
 )
@@ -42,6 +43,9 @@ class MockNotionClient(NotionClient):
         self.trashed = getattr(self, "trashed", [])
         self.trashed.append(page_id)
         return {"id": page_id, "in_trash": True}
+
+    def database_query(self, database_id, limit=100):
+        return self._blocks.get(f"db:{database_id}", [])
 
 
 @pytest.fixture
@@ -693,6 +697,101 @@ class TestCallout:
         types = [b.get("type") for b in client.appended]
         assert "quote" in types
         assert "callout" not in types
+
+
+def _db_page(page_id, **props):
+    """Helper to build a mock database page result."""
+    return {"id": page_id, "properties": props}
+
+
+def _prop(type_, **kwargs):
+    return {"type": type_, type_: kwargs.get("value")} if "value" in kwargs else {"type": type_, **{type_: kwargs}}
+
+
+class TestQueryDatabase:
+    def test_returns_markdown_table(self, client):
+        client._blocks["db:db-123"] = [
+            _db_page("page-1", Name={"type": "title", "title": [{"plain_text": "Alice"}]}, Age={"type": "number", "number": 30}),
+            _db_page("page-2", Name={"type": "title", "title": [{"plain_text": "Bob"}]}, Age={"type": "number", "number": 25}),
+        ]
+        set_client(client)
+        result = notion_query_database("db-123")
+        assert "| Name | Age | ID |" in result
+        assert "| Alice | 30 | page-1 |" in result
+        assert "| Bob | 25 | page-2 |" in result
+
+    def test_empty_database_returns_message(self, client):
+        client._blocks["db:empty"] = []
+        set_client(client)
+        assert notion_query_database("empty") == "No results."
+
+    def test_select_property(self, client):
+        client._blocks["db:db-1"] = [
+            _db_page("p1", Status={"type": "select", "select": {"name": "Done"}}),
+        ]
+        set_client(client)
+        assert "Done" in notion_query_database("db-1")
+
+    def test_multi_select_property(self, client):
+        client._blocks["db:db-1"] = [
+            _db_page("p1", Tags={"type": "multi_select", "multi_select": [{"name": "eng"}, {"name": "backend"}]}),
+        ]
+        set_client(client)
+        assert "eng, backend" in notion_query_database("db-1")
+
+    def test_checkbox_property(self, client):
+        client._blocks["db:db-1"] = [
+            _db_page("p1", Done={"type": "checkbox", "checkbox": True}),
+            _db_page("p2", Done={"type": "checkbox", "checkbox": False}),
+        ]
+        set_client(client)
+        result = notion_query_database("db-1")
+        assert "✓" in result
+        assert "✗" in result
+
+    def test_date_property(self, client):
+        client._blocks["db:db-1"] = [
+            _db_page("p1", Due={"type": "date", "date": {"start": "2026-05-01", "end": None}}),
+        ]
+        set_client(client)
+        assert "2026-05-01" in notion_query_database("db-1")
+
+    def test_date_range_property(self, client):
+        client._blocks["db:db-1"] = [
+            _db_page("p1", Span={"type": "date", "date": {"start": "2026-05-01", "end": "2026-05-07"}}),
+        ]
+        set_client(client)
+        assert "2026-05-01 → 2026-05-07" in notion_query_database("db-1")
+
+    def test_pipe_in_value_escaped(self, client):
+        client._blocks["db:db-1"] = [
+            _db_page("p1", Name={"type": "title", "title": [{"plain_text": "A|B"}]}),
+        ]
+        set_client(client)
+        result = notion_query_database("db-1")
+        assert "A\\|B" in result
+
+    def test_id_column_appended(self, client):
+        client._blocks["db:db-1"] = [
+            _db_page("my-page-id", Name={"type": "title", "title": [{"plain_text": "X"}]}),
+        ]
+        set_client(client)
+        assert "my-page-id" in notion_query_database("db-1")
+
+    def test_status_property(self, client):
+        client._blocks["db:db-1"] = [
+            _db_page("p1", Status={"type": "status", "status": {"name": "In Progress"}}),
+        ]
+        set_client(client)
+        assert "In Progress" in notion_query_database("db-1")
+
+    def test_null_select_renders_empty(self, client):
+        client._blocks["db:db-1"] = [
+            _db_page("p1", Status={"type": "select", "select": None}),
+        ]
+        set_client(client)
+        result = notion_query_database("db-1")
+        assert "| Status | ID |" in result
 
 
 class TestDeletePage:
