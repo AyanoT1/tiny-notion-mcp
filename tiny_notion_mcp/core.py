@@ -452,7 +452,14 @@ def _create_table_blocks(rows: list[list[str]]) -> list[dict]:
 
     for idx, row in enumerate(rows):
         is_header = idx == 0
-        cells = [[{"text": {"content": cell}, "annotations": {"bold": is_header}}] for cell in row]
+        cells = []
+        for cell in row:
+            rich_text = _parse_inline_formatting(cell)
+            if is_header:
+                for rt in rich_text:
+                    ann = rt.setdefault("annotations", {})
+                    ann["bold"] = True
+            cells.append(rich_text)
         blocks.append({
             "object": "block",
             "type": "table_row",
