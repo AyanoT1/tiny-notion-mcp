@@ -5,7 +5,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from tiny_notion_mcp.core import notion_search, notion_read, notion_write, notion_create_page, notion_update_page, notion_delete_page, notion_query_database, NotionClient
+from tiny_notion_mcp.core import notion_search, notion_read, notion_get_blocks, notion_write, notion_create_page, notion_update_page, notion_delete_page, notion_query_database, NotionClient
 
 
 class NotionClientImpl(NotionClient):
@@ -88,6 +88,21 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="notion_read",
             description="Read a Notion page as markdown. Returns markdown string directly.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "page_id": {"type": "string", "description": "Notion page ID"},
+                },
+                "required": ["page_id"],
+            },
+        ),
+        Tool(
+            name="notion_get_blocks",
+            description=(
+                "List all blocks on a page with their IDs. "
+                "Returns one line per block: block-id | block_type | text_preview. "
+                "Use the block-id with notion_write's after_block_id to insert content after a specific block."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -214,6 +229,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         )
     elif name == "notion_read":
         result = notion_read(arguments["page_id"])
+    elif name == "notion_get_blocks":
+        result = notion_get_blocks(arguments["page_id"])
     elif name == "notion_write":
         result = notion_write(
             page_id=arguments["page_id"],

@@ -2,6 +2,7 @@ import pytest
 from tiny_notion_mcp.core import (
     notion_search,
     notion_read,
+    notion_get_blocks,
     notion_write,
     notion_create_page,
     notion_delete_page,
@@ -820,6 +821,48 @@ class TestWriteAfterBlockId:
         set_client(client)
         notion_write("page-1", "| H1 | H2 |\n| --- | --- |\n| a | b |", after_block_id="block-tbl")
         assert client.append_calls[0]["after_block_id"] == "block-tbl"
+
+
+class TestGetBlocks:
+    def test_returns_one_line_per_block(self, client):
+        client._blocks["page-1"] = [
+            {"id": "block-aaa", "type": "heading_2", "heading_2": {"rich_text": [{"plain_text": "SKILLs"}]}},
+            {"id": "block-bbb", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "Some text"}]}},
+        ]
+        set_client(client)
+        result = notion_get_blocks("page-1")
+        lines = result.splitlines()
+        assert len(lines) == 2
+
+    def test_line_format_is_id_type_preview(self, client):
+        client._blocks["page-1"] = [
+            {"id": "block-aaa", "type": "heading_2", "heading_2": {"rich_text": [{"plain_text": "SKILLs"}]}},
+        ]
+        set_client(client)
+        result = notion_get_blocks("page-1")
+        assert result == "block-aaa | heading_2 | SKILLs"
+
+    def test_child_page_uses_title(self, client):
+        client._blocks["page-1"] = [
+            {"id": "block-ccc", "type": "child_page", "child_page": {"title": "My Subpage"}},
+        ]
+        set_client(client)
+        result = notion_get_blocks("page-1")
+        assert "block-ccc | child_page | My Subpage" in result
+
+    def test_divider_preview(self, client):
+        client._blocks["page-1"] = [
+            {"id": "block-ddd", "type": "divider", "divider": {}},
+        ]
+        set_client(client)
+        result = notion_get_blocks("page-1")
+        assert "block-ddd | divider | ---" in result
+
+    def test_empty_page_returns_empty_string(self, client):
+        client._blocks["page-1"] = []
+        set_client(client)
+        result = notion_get_blocks("page-1")
+        assert result == ""
 
 
 class TestDeletePage:

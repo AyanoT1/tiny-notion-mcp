@@ -92,6 +92,37 @@ def notion_read(page_id: str) -> str:
     return _blocks_to_markdown(blocks)
 
 
+def notion_get_blocks(page_id: str) -> str:
+    """
+    List all blocks on a page with their IDs.
+
+    Returns one line per block: block-id | block_type | text_preview
+    Use the block-id with notion_write's after_block_id to insert content
+    after a specific block.
+    """
+    client = _get_client()
+    blocks = client.blocks_children_list(page_id)
+
+    lines = []
+    for block in blocks:
+        block_id = block.get("id", "")
+        block_type = block.get("type", "unknown")
+        data = block.get(block_type, {})
+        if "rich_text" in data:
+            preview = "".join(t.get("plain_text", "") for t in data["rich_text"])
+        elif block_type == "child_page":
+            preview = data.get("title", "")
+        elif block_type == "table":
+            preview = f"({data.get('table_width', '?')} columns)"
+        elif block_type == "divider":
+            preview = "---"
+        else:
+            preview = ""
+        lines.append(f"{block_id} | {block_type} | {preview}")
+
+    return "\n".join(lines)
+
+
 def notion_write(page_id: str, markdown: str, after_block_id: str | None = None) -> dict:
     """
     Append markdown to a Notion page.
