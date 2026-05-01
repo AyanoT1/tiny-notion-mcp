@@ -70,33 +70,18 @@ The following block types are recognised by Notion but not yet handled. They are
 
 ## Installation
 
-### Claude Code
+Clone the repo then
 
-One command — no cloning needed:
+```sh
+uv tool install .
+```
 
+Then add the MCP to the required app, should call:
 ```bash
-claude mcp add tiny-notion-mcp -e NOTION_TOKEN=secret_... -- uvx --from git+https://github.com/AyanoT1/tiny-notion-mcp tiny-notion-mcp
+uvx tiny-notion-mcp
 ```
 
-### Claude Desktop
-
-Add this to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "tiny-notion-mcp": {
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/AyanoT1/tiny-notion-mcp", "tiny-notion-mcp"],
-      "env": {
-        "NOTION_TOKEN": "secret_..."
-      }
-    }
-  }
-}
-```
-
-`uvx` handles downloading and running the package automatically — no manual install step required. `NOTION_API_KEY` is accepted as an alias for `NOTION_TOKEN`.
+With the env variable NOTION_TOKEN set in the config.
 
 ## Development
 
@@ -110,7 +95,7 @@ uv run pytest
 To update a local Claude Code installation after making changes:
 
 ```bash
-uv tool install . --force
+uv tool install . --force --no-cache
 ```
 
 Then reconnect the MCP server from Claude Code's `/mcp` menu.
