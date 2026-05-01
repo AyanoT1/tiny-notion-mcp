@@ -30,6 +30,10 @@ class NotionClient:
         """Query a database and return page results."""
         ...
 
+    def block_delete(self, block_id: str) -> dict:
+        """Delete (trash) a single block."""
+        ...
+
     def pages_update(self, page_id: str, properties: dict) -> dict:
         """Update page properties."""
         ...
@@ -170,6 +174,18 @@ def notion_write(page_id: str, markdown: str, after_block_id: str | None = None)
 
     _flush()
     return result
+
+
+def notion_delete_block(block_id: str) -> str:
+    """
+    Delete a single block (moves it to Notion's trash — recoverable within 30 days).
+
+    Use notion_get_blocks to find the block ID first.
+    WARNING: Deleting a parent block (e.g. a table or toggle) also deletes all its children.
+    """
+    client = _get_client()
+    client.block_delete(block_id)
+    return f"Deleted block {block_id}"
 
 
 def notion_delete_page(page_id: str) -> str:

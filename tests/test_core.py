@@ -5,6 +5,7 @@ from tiny_notion_mcp.core import (
     notion_get_blocks,
     notion_write,
     notion_create_page,
+    notion_delete_block,
     notion_delete_page,
     notion_query_database,
     set_client,
@@ -41,6 +42,11 @@ class MockNotionClient(NotionClient):
         page = {"id": f"new-page-{len(self.created_pages)}", "url": f"https://notion.so/new-page-{len(self.created_pages)}"}
         self.created_pages.append({"parent_id": parent_id, "title": title, "parent_type": parent_type})
         return page
+
+    def block_delete(self, block_id):
+        self.deleted_blocks = getattr(self, "deleted_blocks", [])
+        self.deleted_blocks.append(block_id)
+        return {"id": block_id, "in_trash": True}
 
     def page_trash(self, page_id):
         self.trashed = getattr(self, "trashed", [])
@@ -863,6 +869,19 @@ class TestGetBlocks:
         set_client(client)
         result = notion_get_blocks("page-1")
         assert result == ""
+
+
+class TestDeleteBlock:
+    def test_delete_block_calls_block_delete(self, client):
+        set_client(client)
+        notion_delete_block("block-abc")
+        assert "block-abc" in client.deleted_blocks
+
+    def test_delete_block_returns_confirmation(self, client):
+        set_client(client)
+        result = notion_delete_block("block-abc")
+        assert "block-abc" in result
+        assert "Deleted" in result
 
 
 class TestDeletePage:

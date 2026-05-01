@@ -5,7 +5,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from tiny_notion_mcp.core import notion_search, notion_read, notion_get_blocks, notion_write, notion_create_page, notion_update_page, notion_delete_page, notion_query_database, NotionClient
+from tiny_notion_mcp.core import notion_search, notion_read, notion_get_blocks, notion_write, notion_create_page, notion_update_page, notion_delete_block, notion_delete_page, notion_query_database, NotionClient
 
 
 class NotionClientImpl(NotionClient):
@@ -46,6 +46,9 @@ class NotionClientImpl(NotionClient):
 
     def pages_update(self, page_id: str, properties: dict) -> dict:
         return self._client.pages.update(page_id=page_id, properties=properties)
+
+    def block_delete(self, block_id: str) -> dict:
+        return self._client.blocks.delete(block_id=block_id)
 
     def page_trash(self, page_id: str) -> dict:
         return self._client.pages.update(page_id=page_id, **{"in_trash": True})
@@ -198,6 +201,21 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="notion_delete_block",
+            description=(
+                "⚠️ DESTRUCTIVE — deletes a single block (moves to Notion's trash, recoverable within 30 days). "
+                "Use notion_get_blocks to find the block ID first. "
+                "Deleting a parent block (table, toggle) also deletes all its children."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "block_id": {"type": "string", "description": "ID of the block to delete"},
+                },
+                "required": ["block_id"],
+            },
+        ),
+        Tool(
             name="notion_delete_page",
             description=(
                 "⚠️ DESTRUCTIVE — moves a Notion page to trash. "
@@ -255,6 +273,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             database_id=arguments["database_id"],
             limit=arguments.get("limit", 100),
         )
+    elif name == "notion_delete_block":
+        result = notion_delete_block(block_id=arguments["block_id"])
     elif name == "notion_delete_page":
         result = notion_delete_page(page_id=arguments["page_id"])
     else:
