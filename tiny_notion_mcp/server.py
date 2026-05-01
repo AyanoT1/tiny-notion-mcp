@@ -24,8 +24,11 @@ class NotionClientImpl(NotionClient):
         response = self._client.blocks.children.list(block_id=block_id)
         return response.get("results", [])
 
-    def blocks_children_append(self, block_id: str, children: list[dict]) -> dict:
-        return self._client.blocks.children.append(block_id=block_id, children=children)
+    def blocks_children_append(self, block_id: str, children: list[dict], after_block_id: str | None = None) -> dict:
+        kwargs = {"block_id": block_id, "children": children}
+        if after_block_id:
+            kwargs["after"] = after_block_id
+        return self._client.blocks.children.append(**kwargs)
 
     def pages_create(self, parent_id: str, title: str, parent_type: str = "page_id", extra_properties: dict | None = None) -> dict:
         parent = {"type": parent_type, parent_type: parent_id}
@@ -95,12 +98,20 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="notion_write",
-            description="Append markdown to a Notion page. Converts markdown to blocks.",
+            description=(
+                "Append markdown to a Notion page. Converts markdown to blocks. "
+                "Pass after_block_id to insert the content after a specific block rather than at the end of the page. "
+                "Use notion_read to find block IDs (each block object has an 'id' field)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "page_id": {"type": "string", "description": "Notion page ID"},
                     "markdown": {"type": "string", "description": "Markdown content to append"},
+                    "after_block_id": {
+                        "type": "string",
+                        "description": "Block ID after which to insert the content. Omit to append at the end.",
+                    },
                 },
                 "required": ["page_id", "markdown"],
             },
@@ -207,6 +218,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         result = notion_write(
             page_id=arguments["page_id"],
             markdown=arguments["markdown"],
+            after_block_id=arguments.get("after_block_id"),
         )
     elif name == "notion_create_page":
         result = notion_create_page(

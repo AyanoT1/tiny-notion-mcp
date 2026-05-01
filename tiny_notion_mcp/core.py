@@ -14,8 +14,8 @@ class NotionClient:
         """List block children."""
         ...
 
-    def blocks_children_append(self, block_id: str, children: list[dict]) -> dict:
-        """Append blocks to a page."""
+    def blocks_children_append(self, block_id: str, children: list[dict], after_block_id: str | None = None) -> dict:
+        """Append blocks to a page. Pass after_block_id to insert after a specific block."""
         ...
 
     def pages_create(self, parent_id: str, title: str, parent_type: str = "page_id", extra_properties: dict | None = None) -> dict:
@@ -92,11 +92,12 @@ def notion_read(page_id: str) -> str:
     return _blocks_to_markdown(blocks)
 
 
-def notion_write(page_id: str, markdown: str) -> dict:
+def notion_write(page_id: str, markdown: str, after_block_id: str | None = None) -> dict:
     """
     Append markdown to a Notion page.
 
     Converts markdown to blocks and appends to page.
+    If after_block_id is given, the first batch is inserted after that block (positional insert).
     Tables use two API calls: create the table block, then append rows to its ID.
     """
     client = _get_client()
@@ -105,12 +106,15 @@ def notion_write(page_id: str, markdown: str) -> dict:
     result = {}
     pending: list[dict] = []
     i = 0
+    used_after = False
 
     def _flush():
-        nonlocal result
+        nonlocal result, used_after
         if pending:
-            result = client.blocks_children_append(page_id, pending)
+            after = after_block_id if not used_after else None
+            result = client.blocks_children_append(page_id, pending, after_block_id=after)
             pending.clear()
+            used_after = True
 
     while i < len(blocks):
         block = blocks[i]
@@ -124,7 +128,9 @@ def notion_write(page_id: str, markdown: str) -> dict:
                 i += 1
             # Notion requires rows as children inside the table object at creation time
             table_with_children = {**block, "table": {**block["table"], "children": rows}}
-            result = client.blocks_children_append(page_id, [table_with_children])
+            after = after_block_id if not used_after else None
+            result = client.blocks_children_append(page_id, [table_with_children], after_block_id=after)
+            used_after = True
         elif block.get("type") != "table_row":
             pending.append(block)
             i += 1

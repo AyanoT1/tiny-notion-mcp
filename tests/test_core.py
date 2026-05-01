@@ -29,14 +29,16 @@ class MockNotionClient(NotionClient):
     def blocks_children_list(self, block_id):
         return self._blocks.get(block_id, [])
 
-    def blocks_children_append(self, block_id, children):
+    def blocks_children_append(self, block_id, children, after_block_id=None):
         self.appended.extend(children)
+        self.append_calls = getattr(self, "append_calls", [])
+        self.append_calls.append({"block_id": block_id, "children": list(children), "after_block_id": after_block_id})
         results = [{"id": f"appended-block-{len(self.appended)-len(children)+i}"} for i in range(len(children))]
         return {"object": "list", "results": results}
 
-    def pages_create(self, parent_id, title):
+    def pages_create(self, parent_id, title, parent_type="page_id", extra_properties=None):
         page = {"id": f"new-page-{len(self.created_pages)}", "url": f"https://notion.so/new-page-{len(self.created_pages)}"}
-        self.created_pages.append({"parent_id": parent_id, "title": title})
+        self.created_pages.append({"parent_id": parent_id, "title": title, "parent_type": parent_type})
         return page
 
     def page_trash(self, page_id):
@@ -420,7 +422,7 @@ class TestWriteTables:
         table_block = next(b for b in client.appended if b.get("type") == "table")
         rows = table_block["table"]["children"]
         assert rows[0]["table_row"]["cells"][0][0]["annotations"]["bold"] is True
-        assert rows[1]["table_row"]["cells"][0][0]["annotations"]["bold"] is False
+        assert rows[1]["table_row"]["cells"][0][0].get("annotations", {}).get("bold", False) is False
 
     def test_write_table_does_not_use_placeholder(self, client):
         set_client(client)
@@ -792,6 +794,32 @@ class TestQueryDatabase:
         set_client(client)
         result = notion_query_database("db-1")
         assert "| Status | ID |" in result
+
+
+class TestWriteAfterBlockId:
+    def test_after_block_id_passed_on_first_flush(self, client):
+        set_client(client)
+        notion_write("page-1", "Hello", after_block_id="block-abc")
+        assert client.append_calls[0]["after_block_id"] == "block-abc"
+
+    def test_after_block_id_not_passed_on_subsequent_flush(self, client):
+        set_client(client)
+        # Two separate non-table batches are produced when there's a table in between,
+        # but for plain markdown the whole content is one flush — so test with a table
+        # followed by regular text to trigger two append calls.
+        notion_write("page-1", "Para one\n\n| H1 | H2 |\n| --- | --- |\n| a | b |\n\nPara two", after_block_id="block-xyz")
+        assert client.append_calls[0]["after_block_id"] == "block-xyz"
+        assert client.append_calls[1]["after_block_id"] is None
+
+    def test_after_block_id_none_by_default(self, client):
+        set_client(client)
+        notion_write("page-1", "Hello")
+        assert client.append_calls[0]["after_block_id"] is None
+
+    def test_after_block_id_used_for_table_first(self, client):
+        set_client(client)
+        notion_write("page-1", "| H1 | H2 |\n| --- | --- |\n| a | b |", after_block_id="block-tbl")
+        assert client.append_calls[0]["after_block_id"] == "block-tbl"
 
 
 class TestDeletePage:
