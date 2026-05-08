@@ -20,9 +20,14 @@ class NotionClientImpl(NotionClient):
         )
         return response.get("results", [])
 
-    def blocks_children_list(self, block_id: str) -> list[dict]:
-        response = self._client.blocks.children.list(block_id=block_id)
-        return response.get("results", [])
+    def blocks_children_list(self, block_id: str, start_cursor: str | None = None) -> tuple[list[dict], str | None]:
+        kwargs = {"block_id": block_id}
+        if start_cursor:
+            kwargs["start_cursor"] = start_cursor
+        response = self._client.blocks.children.list(**kwargs)
+        results = response.get("results", [])
+        next_cursor = response.get("next_cursor") if response.get("has_more") else None
+        return results, next_cursor
 
     def blocks_children_append(self, block_id: str, children: list[dict], after_block_id: str | None = None) -> dict:
         kwargs = {"block_id": block_id, "children": children}
@@ -53,14 +58,19 @@ class NotionClientImpl(NotionClient):
     def page_trash(self, page_id: str) -> dict:
         return self._client.pages.update(page_id=page_id, **{"in_trash": True})
 
-    def database_query(self, database_id: str, limit: int = 100) -> list[dict]:
+    def database_query(self, database_id: str, limit: int = 100, start_cursor: str | None = None) -> tuple[list[dict], str | None]:
         db = self._client.databases.retrieve(database_id)
         data_sources = db.get("data_sources", [])
         if not data_sources:
             raise RuntimeError(f"No data source found for database {database_id}")
         data_source_id = data_sources[0]["id"]
-        response = self._client.data_sources.query(data_source_id, page_size=min(limit, 100))
-        return response.get("results", [])
+        kwargs = {"data_source_id": data_source_id, "page_size": min(limit, 100)}
+        if start_cursor:
+            kwargs["start_cursor"] = start_cursor
+        response = self._client.data_sources.query(**kwargs)
+        results = response.get("results", [])
+        next_cursor = response.get("next_cursor") if response.get("has_more") else None
+        return results, next_cursor
 
 
 def _create_client() -> NotionClient:
@@ -90,11 +100,19 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="notion_read",
-            description="Read a Notion page as markdown. Returns markdown string directly.",
+            description=(
+                "Read a Notion page as markdown. Returns markdown string directly. "
+                "If the response ends with 'MORE: <cursor>', pass that cursor as "
+                "start_cursor to read the next batch of blocks."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "page_id": {"type": "string", "description": "Notion page ID"},
+                    "start_cursor": {
+                        "type": "string",
+                        "description": "Cursor from a previous 'MORE:' response to get the next batch",
+                    },
                 },
                 "required": ["page_id"],
             },
@@ -104,12 +122,18 @@ async def list_tools() -> list[Tool]:
             description=(
                 "List all blocks on a page with their IDs. "
                 "Returns one line per block: block-id | block_type | text_preview. "
+                "If the response ends with 'MORE: <cursor>', pass that cursor as "
+                "start_cursor to get the next batch. "
                 "Use the block-id with notion_write's after_block_id to insert content after a specific block."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "page_id": {"type": "string", "description": "Notion page ID"},
+                    "start_cursor": {
+                        "type": "string",
+                        "description": "Cursor from a previous 'MORE:' response to get the next batch",
+                    },
                 },
                 "required": ["page_id"],
             },
@@ -189,13 +213,19 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Query a Notion database and return results as a markdown table. "
                 "Each row is one entry; columns match the database properties. "
-                "An ID column is appended for follow-up reads or writes."
+                "An ID column is appended for follow-up reads or writes. "
+                "If the response ends with 'MORE: <cursor>', pass that cursor as "
+                "start_cursor to get the next batch."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "database_id": {"type": "string", "description": "Notion database ID"},
                     "limit": {"type": "integer", "description": "Max rows to return (default 100, max 100)", "default": 100},
+                    "start_cursor": {
+                        "type": "string",
+                        "description": "Cursor from a previous 'MORE:' response to get the next batch",
+                    },
                 },
                 "required": ["database_id"],
             },
@@ -246,9 +276,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             limit=arguments.get("limit", 10),
         )
     elif name == "notion_read":
-        result = notion_read(arguments["page_id"])
+        result = notion_read(
+            page_id=arguments["page_id"],
+            start_cursor=arguments.get("start_cursor"),
+        )
     elif name == "notion_get_blocks":
-        result = notion_get_blocks(arguments["page_id"])
+        result = notion_get_blocks(
+            page_id=arguments["page_id"],
+            start_cursor=arguments.get("start_cursor"),
+        )
     elif name == "notion_write":
         result = notion_write(
             page_id=arguments["page_id"],
@@ -272,6 +308,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         result = notion_query_database(
             database_id=arguments["database_id"],
             limit=arguments.get("limit", 100),
+            start_cursor=arguments.get("start_cursor"),
         )
     elif name == "notion_delete_block":
         result = notion_delete_block(block_id=arguments["block_id"])

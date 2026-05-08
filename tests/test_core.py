@@ -17,6 +17,7 @@ class MockNotionClient(NotionClient):
     def __init__(self, pages=None):
         self._pages = pages or []
         self._blocks = {}
+        self._page_size = 100
         self.appended = []
         self.created_pages = []
 
@@ -28,8 +29,12 @@ class MockNotionClient(NotionClient):
                 results.append(p)
         return results[:limit]
 
-    def blocks_children_list(self, block_id):
-        return self._blocks.get(block_id, [])
+    def blocks_children_list(self, block_id, start_cursor=None):
+        all_blocks = self._blocks.get(block_id, [])
+        offset = int(start_cursor) if start_cursor is not None else 0
+        page = all_blocks[offset:offset + self._page_size]
+        next_cursor = str(offset + self._page_size) if len(all_blocks) > offset + self._page_size else None
+        return page, next_cursor
 
     def blocks_children_append(self, block_id, children, after_block_id=None):
         self.appended.extend(children)
@@ -53,8 +58,12 @@ class MockNotionClient(NotionClient):
         self.trashed.append(page_id)
         return {"id": page_id, "in_trash": True}
 
-    def database_query(self, database_id, limit=100):
-        return self._blocks.get(f"db:{database_id}", [])
+    def database_query(self, database_id, limit=100, start_cursor=None):
+        all_results = self._blocks.get(f"db:{database_id}", [])
+        offset = int(start_cursor) if start_cursor is not None else 0
+        page = all_results[offset:offset + 100]
+        next_cursor = str(offset + 100) if len(all_results) > offset + 100 else None
+        return page, next_cursor
 
 
 @pytest.fixture
@@ -708,6 +717,245 @@ class TestCallout:
         assert "callout" not in types
 
 
+class TestCodeBlockRead:
+    def test_read_code_block_with_language(self, client):
+        client._blocks["page-123"] = [
+            _code_block("python", "print('hello')"),
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "```python\nprint('hello')\n```" in result
+
+    def test_read_code_block_without_language(self, client):
+        client._blocks["page-123"] = [
+            _code_block("", "echo hi"),
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "```plain text\necho hi\n```" in result
+
+    def test_read_code_block_none_language(self, client):
+        client._blocks["page-123"] = [
+            _code_block(None, "fallback"),
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "```plain text\nfallback\n```" in result
+
+    def test_read_code_block_multiline(self, client):
+        client._blocks["page-123"] = [
+            _code_block("sql", "SELECT *\nFROM users\nWHERE id = 1"),
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "```sql\nSELECT *\nFROM users\nWHERE id = 1\n```" in result
+
+    def test_read_code_block_uses_plain_text(self, client):
+        client._blocks["page-123"] = [
+            {
+                "id": "code-block",
+                "type": "code",
+                "code": {
+                    "rich_text": [
+                        {"plain_text": "x = 1", "annotations": {"bold": True}},
+                    ],
+                    "language": "python",
+                },
+            },
+        ]
+        set_client(client)
+        result = notion_read("page-123")
+        assert "**x = 1**" not in result
+
+
+class TestCodeBlockWrite:
+    def test_write_code_block_with_language(self, client):
+        set_client(client)
+        notion_write("page-123", "```python\nprint('hello')\n```")
+        code = next(b for b in client.appended if b.get("type") == "code")
+        assert code["code"]["language"] == "python"
+        assert code["code"]["rich_text"][0]["text"]["content"] == "print('hello')"
+
+    def test_write_code_block_without_language(self, client):
+        set_client(client)
+        notion_write("page-123", "```\necho hi\n```")
+        code = next(b for b in client.appended if b.get("type") == "code")
+        assert code["code"]["language"] == "plain text"
+        assert code["code"]["rich_text"][0]["text"]["content"] == "echo hi"
+
+    def test_write_code_block_multiline(self, client):
+        set_client(client)
+        notion_write("page-123", "```sql\nSELECT *\nFROM users\nWHERE id = 1\n```")
+        code = next(b for b in client.appended if b.get("type") == "code")
+        assert code["code"]["rich_text"][0]["text"]["content"] == "SELECT *\nFROM users\nWHERE id = 1"
+
+    def test_write_code_block_adjacent_to_paragraphs(self, client):
+        set_client(client)
+        notion_write("page-123", "Before\n\n```sh\necho hi\n```\n\nAfter")
+        types = [b.get("type") for b in client.appended]
+        assert types == ["paragraph", "code", "paragraph"]
+
+    def test_write_code_block_roundtrip(self, client):
+        client._blocks["page-123"] = [
+            _code_block("python", "import os\nprint('hello')"),
+        ]
+        set_client(client)
+        md = notion_read("page-123")
+        client.appended.clear()
+        notion_write("page-123", md)
+        code = next(b for b in client.appended if b.get("type") == "code")
+        assert code["code"]["language"] == "python"
+        assert code["code"]["rich_text"][0]["text"]["content"] == "import os\nprint('hello')"
+
+    def test_write_unclosed_code_fence_creates_block(self, client):
+        set_client(client)
+        notion_write("page-123", "```python\nprint('never closed')\n")
+        code = next(b for b in client.appended if b.get("type") == "code")
+        assert code["code"]["language"] == "python"
+        assert "never closed" in code["code"]["rich_text"][0]["text"]["content"]
+
+    def test_write_code_block_after_table(self, client):
+        set_client(client)
+        notion_write("page-123", "| H1 |\n| --- |\n| A |\n\n```sh\necho hi\n```")
+        types = [b.get("type") for b in client.appended]
+        assert "table" in types
+        assert "code" in types
+        code = next(b for b in client.appended if b.get("type") == "code")
+        assert code["code"]["rich_text"][0]["text"]["content"] == "echo hi"
+
+
+class TestReadPagination:
+    def test_read_no_cursor_when_under_limit(self, client):
+        client._page_size = 100
+        for i in range(50):
+            client._blocks.setdefault("page-123", []).append(
+                {"id": f"b{i}", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": f"Block {i}"}]}},
+            )
+        set_client(client)
+        result = notion_read("page-123")
+        assert "MORE:" not in result
+
+    def test_read_cursor_when_over_limit(self, client):
+        client._page_size = 100
+        for i in range(150):
+            client._blocks.setdefault("page-123", []).append(
+                {"id": f"b{i}", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": f"Block {i}"}]}},
+            )
+        set_client(client)
+        result = notion_read("page-123")
+        assert "MORE: 100" in result
+
+    def test_read_cursor_at_exact_limit(self, client):
+        client._page_size = 100
+        for i in range(100):
+            client._blocks.setdefault("page-123", []).append(
+                {"id": f"b{i}", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": f"Block {i}"}]}},
+            )
+        set_client(client)
+        result = notion_read("page-123")
+        assert "MORE:" not in result
+
+    def test_read_with_start_cursor_returns_next_page(self, client):
+        client._page_size = 100
+        for i in range(250):
+            client._blocks.setdefault("page-123", []).append(
+                {"id": f"b{i}", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": f"Block {i}"}]}},
+            )
+        set_client(client)
+        result = notion_read("page-123", start_cursor="100")
+        assert "Block 100" in result
+        assert "Block 199" in result
+        assert "Block 0" not in result
+        assert "MORE: 200" in result
+
+    def test_read_with_start_cursor_last_page_no_more(self, client):
+        client._page_size = 100
+        for i in range(250):
+            client._blocks.setdefault("page-123", []).append(
+                {"id": f"b{i}", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": f"Block {i}"}]}},
+            )
+        set_client(client)
+        result = notion_read("page-123", start_cursor="200")
+        assert "Block 200" in result
+        assert "Block 249" in result
+        assert "MORE:" not in result
+
+    def test_read_empty_page_no_cursor(self, client):
+        client._blocks["page-123"] = []
+        set_client(client)
+        result = notion_read("page-123")
+        assert result == ""
+
+
+class TestGetBlocksPagination:
+    def test_get_blocks_no_cursor_when_under_limit(self, client):
+        client._page_size = 100
+        for i in range(50):
+            client._blocks.setdefault("page-123", []).append(
+                {"id": f"b{i}", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": f"Block {i}"}]}},
+            )
+        set_client(client)
+        result = notion_get_blocks("page-123")
+        assert "MORE:" not in result
+
+    def test_get_blocks_cursor_when_over_limit(self, client):
+        client._page_size = 100
+        for i in range(150):
+            client._blocks.setdefault("page-123", []).append(
+                {"id": f"b{i}", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": f"Block {i}"}]}},
+            )
+        set_client(client)
+        result = notion_get_blocks("page-123")
+        assert "MORE: 100" in result
+
+    def test_get_blocks_with_start_cursor(self, client):
+        client._page_size = 100
+        for i in range(250):
+            client._blocks.setdefault("page-123", []).append(
+                {"id": f"b{i}", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": f"Block {i}"}]}},
+            )
+        set_client(client)
+        result = notion_get_blocks("page-123", start_cursor="100")
+        assert "b100" in result.split(" | ")[0]
+        assert "b199" in result
+        assert "MORE: 200" in result
+
+
+class TestDatabasePagination:
+    def test_query_no_cursor_when_under_limit(self, client):
+        for i in range(50):
+            client._blocks.setdefault("db:db-1", []).append(
+                {"id": f"p{i}", "properties": {"Name": {"type": "title", "title": [{"plain_text": f"Entry {i}"}]}}},
+            )
+        set_client(client)
+        result = notion_query_database("db-1")
+        assert "MORE:" not in result
+
+    def test_query_cursor_when_over_limit(self, client):
+        for i in range(150):
+            client._blocks.setdefault("db:db-1", []).append(
+                {"id": f"p{i}", "properties": {"Name": {"type": "title", "title": [{"plain_text": f"Entry {i}"}]}}},
+            )
+        set_client(client)
+        result = notion_query_database("db-1")
+        assert "MORE: 100" in result
+
+    def test_query_with_start_cursor(self, client):
+        for i in range(250):
+            client._blocks.setdefault("db:db-1", []).append(
+                {"id": f"p{i}", "properties": {"Name": {"type": "title", "title": [{"plain_text": f"Entry {i}"}]}}},
+            )
+        set_client(client)
+        result = notion_query_database("db-1", start_cursor="100")
+        assert "Entry 100" in result
+        assert "MORE: 200" in result
+
+    def test_empty_database_no_cursor(self, client):
+        client._blocks["db:empty"] = []
+        set_client(client)
+        assert notion_query_database("empty") == "No results."
+
+
 def _db_page(page_id, **props):
     """Helper to build a mock database page result."""
     return {"id": page_id, "properties": props}
@@ -715,6 +963,16 @@ def _db_page(page_id, **props):
 
 def _prop(type_, **kwargs):
     return {"type": type_, type_: kwargs.get("value")} if "value" in kwargs else {"type": type_, **{type_: kwargs}}
+
+def _code_block(language, text, block_id="code-block"):
+    return {
+        "id": block_id,
+        "type": "code",
+        "code": {
+            "rich_text": [{"plain_text": text}],
+            "language": language or "",
+        },
+    }
 
 
 class TestQueryDatabase:
@@ -827,6 +1085,37 @@ class TestWriteAfterBlockId:
         set_client(client)
         notion_write("page-1", "| H1 | H2 |\n| --- | --- |\n| a | b |", after_block_id="block-tbl")
         assert client.append_calls[0]["after_block_id"] == "block-tbl"
+
+
+class TestWriteChunking:
+    def test_small_content_single_call(self, client):
+        set_client(client)
+        notion_write("page-1", "Hello\n\nWorld\n\nFoo")
+        assert len(client.append_calls) == 1
+
+    def test_large_content_multiple_calls(self, client):
+        lines = "\n".join(f"Paragraph {i}" for i in range(60))
+        set_client(client)
+        notion_write("page-1", lines)
+        assert len(client.append_calls) == 2
+        assert len(client.append_calls[0]["children"]) == 50
+        assert len(client.append_calls[1]["children"]) == 10
+
+    def test_table_not_split(self, client):
+        md = "\n".join([f"Paragraph {i}" for i in range(48)])
+        md += "\n\n| H1 |\n| --- |\n| A |\n"
+        set_client(client)
+        notion_write("page-1", md)
+        assert len(client.append_calls) == 2
+        assert all(b.get("type") != "table_row" for b in client.append_calls[0]["children"])
+        assert client.append_calls[1]["children"][0].get("type") == "table"
+
+    def test_after_block_id_only_on_first_chunk(self, client):
+        lines = "\n".join(f"Paragraph {i}" for i in range(60))
+        set_client(client)
+        notion_write("page-1", lines, after_block_id="block-abc")
+        assert client.append_calls[0]["after_block_id"] == "block-abc"
+        assert client.append_calls[1]["after_block_id"] is None
 
 
 class TestGetBlocks:

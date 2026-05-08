@@ -10,8 +10,8 @@ class NotionClient:
         """Search Notion pages."""
         ...
 
-    def blocks_children_list(self, block_id: str) -> list[dict]:
-        """List block children."""
+    def blocks_children_list(self, block_id: str, start_cursor: str | None = None) -> tuple[list[dict], str | None]:
+        """List block children. Returns (blocks, next_cursor)."""
         ...
 
     def blocks_children_append(self, block_id: str, children: list[dict], after_block_id: str | None = None) -> dict:
@@ -26,8 +26,8 @@ class NotionClient:
         """Trash (move to bin) a page."""
         ...
 
-    def database_query(self, database_id: str, limit: int = 100) -> list[dict]:
-        """Query a database and return page results."""
+    def database_query(self, database_id: str, limit: int = 100, start_cursor: str | None = None) -> tuple[list[dict], str | None]:
+        """Query a database and return page results. Returns (results, next_cursor)."""
         ...
 
     def block_delete(self, block_id: str) -> dict:
@@ -84,28 +84,35 @@ def notion_search(query: str, limit: int = 10) -> str:
     return "\n".join(lines)
 
 
-def notion_read(page_id: str) -> str:
+def notion_read(page_id: str, start_cursor: str | None = None) -> str:
     """
     Read a Notion page as markdown.
     
     Returns markdown string directly - no file paths.
+    If there are more blocks available, appends 'MORE: <cursor>'.
+    Pass the cursor back as start_cursor to get the next page.
     """
     client = _get_client()
-    blocks = client.blocks_children_list(page_id)
-    
-    return _blocks_to_markdown(blocks)
+    blocks, next_cursor = client.blocks_children_list(page_id, start_cursor=start_cursor)
+
+    md = _blocks_to_markdown(blocks)
+    if next_cursor:
+        md += f"\nMORE: {next_cursor}"
+    return md
 
 
-def notion_get_blocks(page_id: str) -> str:
+def notion_get_blocks(page_id: str, start_cursor: str | None = None) -> str:
     """
     List all blocks on a page with their IDs.
 
     Returns one line per block: block-id | block_type | text_preview
+    If there are more blocks available, appends 'MORE: <cursor>'.
+    Pass the cursor back as start_cursor to get the next page.
     Use the block-id with notion_write's after_block_id to insert content
     after a specific block.
     """
     client = _get_client()
-    blocks = client.blocks_children_list(page_id)
+    blocks, next_cursor = client.blocks_children_list(page_id, start_cursor=start_cursor)
 
     lines = []
     for block in blocks:
@@ -124,7 +131,13 @@ def notion_get_blocks(page_id: str) -> str:
             preview = ""
         lines.append(f"{block_id} | {block_type} | {preview}")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    if next_cursor:
+        result += f"\nMORE: {next_cursor}"
+    return result
+
+
+_MAX_BATCH_SIZE = 50
 
 
 def notion_write(page_id: str, markdown: str, after_block_id: str | None = None) -> dict:
@@ -133,7 +146,8 @@ def notion_write(page_id: str, markdown: str, after_block_id: str | None = None)
 
     Converts markdown to blocks and appends to page.
     If after_block_id is given, the first batch is inserted after that block (positional insert).
-    Tables use two API calls: create the table block, then append rows to its ID.
+    Large markdown is automatically split into batches of 50 blocks to respect the Notion API limit.
+    Tables are sent as single blocks with embedded children rows.
     """
     client = _get_client()
     blocks = _markdown_to_blocks(markdown)
@@ -144,24 +158,23 @@ def notion_write(page_id: str, markdown: str, after_block_id: str | None = None)
     used_after = False
 
     def _flush():
-        nonlocal result, used_after
-        if pending:
+        nonlocal result, used_after, pending
+        while pending:
+            batch = pending[:_MAX_BATCH_SIZE]
+            pending = pending[_MAX_BATCH_SIZE:]
             after = after_block_id if not used_after else None
-            result = client.blocks_children_append(page_id, pending, after_block_id=after)
-            pending.clear()
+            result = client.blocks_children_append(page_id, batch, after_block_id=after)
             used_after = True
 
     while i < len(blocks):
         block = blocks[i]
         if block.get("type") == "table":
             _flush()
-            # Collect rows that follow the table block
             rows = []
             i += 1
             while i < len(blocks) and blocks[i].get("type") == "table_row":
                 rows.append(blocks[i])
                 i += 1
-            # Notion requires rows as children inside the table object at creation time
             table_with_children = {**block, "table": {**block["table"], "children": rows}}
             after = after_block_id if not used_after else None
             result = client.blocks_children_append(page_id, [table_with_children], after_block_id=after)
@@ -201,16 +214,17 @@ def notion_delete_page(page_id: str) -> str:
     return f"Trashed page {page_id}"
 
 
-def notion_query_database(database_id: str, limit: int = 100) -> str:
+def notion_query_database(database_id: str, limit: int = 100, start_cursor: str | None = None) -> str:
     """
     Query a Notion database and return results as a markdown table.
 
     Each row is one database entry. Columns match the database properties in
     their defined order. An ID column is appended for follow-up tool calls.
+    If there are more results available, appends 'MORE: <cursor>'.
     Returns 'No results.' if the database is empty or has no matching entries.
     """
     client = _get_client()
-    results = client.database_query(database_id, limit=limit)
+    results, next_cursor = client.database_query(database_id, limit=limit, start_cursor=start_cursor)
 
     if not results:
         return "No results."
@@ -226,7 +240,10 @@ def notion_query_database(database_id: str, limit: int = 100) -> str:
         values.append(page.get("id", ""))
         rows.append("| " + " | ".join(v.replace("|", "\\|") for v in values) + " |")
 
-    return "\n".join(rows)
+    result = "\n".join(rows)
+    if next_cursor:
+        result += f"\nMORE: {next_cursor}"
+    return result
 
 
 def _extract_property_value(prop: dict) -> str:
@@ -363,7 +380,7 @@ def _blocks_to_markdown(blocks: list[dict]) -> str:
             numbered_index = 0
 
         if block_type == "table":
-            row_blocks = _get_client().blocks_children_list(block["id"])
+            row_blocks, _ = _get_client().blocks_children_list(block["id"])
             table_lines = []
             for row_block in row_blocks:
                 if row_block.get("type") == "table_row":
@@ -391,6 +408,10 @@ def _blocks_to_markdown(blocks: list[dict]) -> str:
         elif block_type == "heading_3":
             text = _get_rich_text(block.get("heading_3", {}))
             entries.append(("heading_3", f"### {text}"))
+        elif block_type == "code":
+            lang = block.get("code", {}).get("language", "") or "plain text"
+            text = "".join(t.get("plain_text", "") for t in block.get("code", {}).get("rich_text", []))
+            entries.append(("code", f"```{lang}\n{text}\n```"))
         elif block_type == "child_page":
             child_title = block.get("child_page", {}).get("title", "")
             child_id = block.get("id", "")
@@ -464,9 +485,38 @@ def _markdown_to_blocks(markdown: str) -> list[dict]:
 
     table_rows = []
     non_table_blocks = []
+    in_code_block = False
+    code_lang = "sh"
+    code_lines = []
 
-    for line in markdown.split("\n"):
-        line = line.strip()
+    for raw_line in markdown.split("\n"):
+        if in_code_block:
+            if raw_line.rstrip() == "```":
+                code_content = "\n".join(code_lines)
+                non_table_blocks.append({
+                    "object": "block",
+                    "type": "code",
+                    "code": {
+                        "rich_text": [{"type": "text", "text": {"content": code_content}}],
+                        "language": code_lang,
+                    },
+                })
+                in_code_block = False
+                code_lines = []
+                code_lang = "plain text"
+            else:
+                code_lines.append(raw_line)
+            continue
+
+        if raw_line.strip().startswith("```"):
+            lang = raw_line.strip()[3:].strip() or "plain text"
+            lang = {"sh": "shell"}.get(lang, lang)
+            in_code_block = True
+            code_lang = lang
+            code_lines = []
+            continue
+
+        line = raw_line.strip()
         if not line:
             if table_rows:
                 non_table_blocks.extend(_create_table_blocks(table_rows))
@@ -480,6 +530,18 @@ def _markdown_to_blocks(markdown: str) -> list[dict]:
                 non_table_blocks.extend(_create_table_blocks(table_rows))
                 table_rows = []
             non_table_blocks.extend(_parse_line_to_blocks(line))
+
+    if in_code_block:
+        code_content = "\n".join(code_lines)
+        lang = {"sh": "shell"}.get(code_lang, code_lang)
+        non_table_blocks.append({
+            "object": "block",
+            "type": "code",
+            "code": {
+                "rich_text": [{"type": "text", "text": {"content": code_content}}],
+                "language": lang,
+            },
+        })
 
     if table_rows:
         non_table_blocks.extend(_create_table_blocks(table_rows))
